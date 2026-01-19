@@ -3,24 +3,33 @@ Decorator implementations for rate limiting.
 """
 
 import functools
-from typing import Callable, Optional, Any
-from inspect import iscoroutinefunction
 import logging
+from inspect import iscoroutinefunction
+from typing import Any, Callable, Optional, TypeVar
+
+from typing_extensions import ParamSpec
 
 from .exceptions import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
+P = ParamSpec("P")
+R = TypeVar("R")
+
+KeyFunc = Callable[[Any], str]
+TenantFunc = Callable[[Any], str]
+CostFunc = Callable[[Any], int]
+
 
 def create_limit_decorator(
     limiter: Any,
     rate: str,
-    key_func: Optional[Callable] = None,
-    tenant_func: Optional[Callable] = None,
+    key_func: Optional[KeyFunc] = None,
+    tenant_func: Optional[TenantFunc] = None,
     algorithm: Optional[str] = None,
-    cost_func: Optional[Callable] = None,
+    cost_func: Optional[CostFunc] = None,
     trust_proxy_headers: bool = False,
-):
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Create a rate limit decorator for async functions.
 
@@ -51,13 +60,13 @@ def create_limit_decorator(
         >>>     return {"status": "ok"}
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
         """The actual decorator."""
 
         if not iscoroutinefunction(func):
             # For sync functions, create an async wrapper
             @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs):
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 # Extract request from arguments
                 request = _extract_request(args, kwargs)
 
@@ -77,11 +86,11 @@ def create_limit_decorator(
                 # Note: This converts sync to async, which may not be ideal
                 return func(*args, **kwargs)
 
-            return async_wrapper
+            return async_wrapper  # type: ignore[return-value]
         else:
             # For async functions
             @functools.wraps(func)
-            async def async_wrapper(*args, **kwargs):
+            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 # Extract request from arguments
                 request = _extract_request(args, kwargs)
 
@@ -100,12 +109,12 @@ def create_limit_decorator(
                 # Call the original async function
                 return await func(*args, **kwargs)
 
-            return async_wrapper
+            return async_wrapper  # type: ignore[return-value]
 
     return decorator
 
 
-def _extract_request(args: tuple, kwargs: dict) -> Any:
+def _extract_request(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
     """
     Extract request object from function arguments.
 
@@ -145,10 +154,10 @@ async def _check_rate_limit(
     limiter: Any,
     request: Any,
     rate: str,
-    key_func: Optional[Callable],
-    tenant_func: Optional[Callable],
+    key_func: Optional[KeyFunc],
+    tenant_func: Optional[TenantFunc],
     algorithm: Optional[str],
-    cost_func: Optional[Callable],
+    cost_func: Optional[CostFunc],
     trust_proxy_headers: bool = False,
 ) -> None:
     """
@@ -298,7 +307,7 @@ class RateLimitMiddleware:
         app: Any,
         limiter: Any,
         default_rate: str = "1000/minute",
-        exclude_paths: Optional[list] = None,
+        exclude_paths: Optional[list[str]] = None,
         trust_proxy_headers: bool = False,
     ):
         """
@@ -318,7 +327,7 @@ class RateLimitMiddleware:
         self.exclude_paths = exclude_paths or []
         self.trust_proxy_headers = trust_proxy_headers
 
-    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         """
         ASGI middleware implementation.
 
@@ -340,19 +349,16 @@ class RateLimitMiddleware:
 
         # Create a simple request-like object for rate limiting
         class SimpleRequest:
-            def __init__(self, scope):
-                self.client = type("Client", (), {
-                    "host": scope.get("client", ("unknown", None))[0]
-                })()
+            def __init__(self, scope: dict[str, Any]) -> None:
+                self.client = type(
+                    "Client", (), {"host": scope.get("client", ("unknown", None))[0]}
+                )()
                 # ASGI headers are List[Tuple[bytes, bytes]], convert to str keys/values
                 raw_headers = scope.get("headers", [])
-                self.headers = {
-                    k.decode("latin-1"): v.decode("latin-1")
-                    for k, v in raw_headers
-                }
+                self.headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers}
                 self.path = scope.get("path", "")
 
-        request = SimpleRequest(scope)
+        request: Any = SimpleRequest(scope)
 
         # Check rate limit
         try:
@@ -362,20 +368,24 @@ class RateLimitMiddleware:
             )
         except RateLimitExceeded as e:
             # Send 429 response
-            await send({
-                "type": "http.response.start",
-                "status": 429,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"retry-after", str(e.retry_after).encode()),
-                    (b"x-ratelimit-limit", self.default_rate.encode()),
-                    (b"x-ratelimit-remaining", str(e.remaining).encode()),
-                ],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": f'{{"error": "Rate limit exceeded", "retry_after": {e.retry_after}}}'.encode(),
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 429,
+                    "headers": [
+                        (b"content-type", b"application/json"),
+                        (b"retry-after", str(e.retry_after).encode()),
+                        (b"x-ratelimit-limit", self.default_rate.encode()),
+                        (b"x-ratelimit-remaining", str(e.remaining).encode()),
+                    ],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": f'{{"error": "Rate limit exceeded", "retry_after": {e.retry_after}}}'.encode(),  # noqa: E501
+                }
+            )
             return
 
         # Continue with the application

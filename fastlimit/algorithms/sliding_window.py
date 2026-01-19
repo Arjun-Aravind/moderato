@@ -5,9 +5,12 @@ The sliding window algorithm provides the most accurate rate limiting
 by combining the current window with a weighted portion of the previous window.
 """
 
-import time
-from typing import Optional
 import logging
+import time
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..backends.redis import RedisBackend
 
 from .base import RateLimitAlgorithm, RateLimitResult
 
@@ -60,7 +63,7 @@ class SlidingWindow(RateLimitAlgorithm):
     - Not as smooth as Token Bucket for bursts
     """
 
-    def __init__(self, backend):
+    def __init__(self, backend: "RedisBackend") -> None:
         """
         Initialize Sliding Window algorithm.
 
@@ -164,14 +167,14 @@ class SlidingWindow(RateLimitAlgorithm):
 
         return success
 
-    async def get_usage(self, key: str, max_requests: int, window_seconds: int) -> dict:
+    async def get_usage(self, key: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """
         Get current usage statistics for sliding window.
 
         Args:
             key: Base identifier for the rate limit
-            max_requests: Maximum requests (with multiplier)
-            window_seconds: Time window in seconds
+            *args: Expected to contain max_requests and window_seconds
+            **kwargs: Not used
 
         Returns:
             Dictionary with:
@@ -182,6 +185,8 @@ class SlidingWindow(RateLimitAlgorithm):
             - previous_window: Requests in previous window
             - weight: Weight applied to previous window (0.0 to 1.0)
         """
+        max_requests: int = args[0] if len(args) > 0 else kwargs.get("max_requests", 0)
+        window_seconds: int = args[1] if len(args) > 1 else kwargs.get("window_seconds", 60)
         current_time = int(time.time())
         window_start = current_time - (current_time % window_seconds)
         previous_window_start = window_start - window_seconds

@@ -2,9 +2,10 @@
 Pydantic models for configuration and data structures.
 """
 
-from pydantic import BaseModel, Field, field_validator
-from typing import Optional, Literal
 from dataclasses import dataclass
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 @dataclass
@@ -92,8 +93,7 @@ class RateLimitConfig(BaseModel):
             raise ValueError("Value must be positive")
         return v
 
-    class Config:
-        """Pydantic config."""
-
-        validate_assignment = True
-        frozen = False  # Allow modification after creation
+    model_config = ConfigDict(
+        validate_assignment=True,
+        frozen=False,
+    )

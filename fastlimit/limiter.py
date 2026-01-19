@@ -3,14 +3,14 @@ Main RateLimiter class implementation.
 """
 
 import asyncio
-from typing import Optional, Callable, Any, Dict
-from datetime import datetime
 import logging
+from types import TracebackType
+from typing import Any, Callable, Optional
 
 from .backends.redis import RedisBackend
-from .models import RateLimitConfig, CheckResult
-from .exceptions import RateLimitExceeded, RateLimitConfigError
-from .utils import parse_rate, generate_key, get_time_window
+from .exceptions import RateLimitConfigError, RateLimitExceeded
+from .models import CheckResult, RateLimitConfig
+from .utils import generate_key, get_time_window, parse_rate
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +54,12 @@ class RateLimiter:
             default_algorithm: Default algorithm to use
             enable_metrics: Whether to enable metrics collection
         """
+        if default_algorithm not in ("fixed_window", "token_bucket", "sliding_window"):
+            raise RateLimitConfigError(f"Unknown algorithm: {default_algorithm}")
         self.config = RateLimitConfig(
             redis_url=redis_url,
             key_prefix=key_prefix,
-            default_algorithm=default_algorithm,
+            default_algorithm=default_algorithm,  # type: ignore[arg-type]
             enable_metrics=enable_metrics,
         )
         self.backend = RedisBackend(self.config)
@@ -66,12 +68,17 @@ class RateLimiter:
 
         logger.debug(f"Initialized RateLimiter with config: {self.config}")
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "RateLimiter":
         """Async context manager entry."""
         await self.connect()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -208,7 +215,7 @@ class RateLimiter:
         try:
             requests, window_seconds = parse_rate(rate)
         except ValueError as e:
-            raise RateLimitConfigError(f"Invalid rate format: {e}")
+            raise RateLimitConfigError(f"Invalid rate format: {e}") from e
 
         # Select algorithm
         algorithm = algorithm or self.config.default_algorithm
@@ -304,22 +311,19 @@ class RateLimiter:
                 remaining=remaining_requests,
             )
 
-        logger.debug(
-            f"Rate limit check passed for key={key}, "
-            f"remaining={remaining_requests}"
-        )
+        logger.debug(f"Rate limit check passed for key={key}, " f"remaining={remaining_requests}")
 
         return check_result
 
     def limit(
         self,
         rate: str,
-        key: Optional[Callable] = None,
-        tenant_type: Optional[Callable] = None,
+        key: Optional[Callable[..., str]] = None,
+        tenant_type: Optional[Callable[..., str]] = None,
         algorithm: Optional[str] = None,
-        cost: Optional[Callable] = None,
+        cost: Optional[Callable[..., int]] = None,
         trust_proxy_headers: bool = False,
-    ):
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """
         Create a decorator for rate limiting endpoints.
 
@@ -428,9 +432,7 @@ class RateLimiter:
 
         return reset_success
 
-    async def _reset_fixed_window(
-        self, key: str, tenant_type: str, current_time: int
-    ) -> bool:
+    async def _reset_fixed_window(self, key: str, tenant_type: str, current_time: int) -> bool:
         """Reset fixed window rate limit keys."""
         reset_success = False
 
@@ -459,9 +461,7 @@ class RateLimiter:
         )
         return await self.backend.reset(full_key)
 
-    async def _reset_sliding_window(
-        self, key: str, tenant_type: str, current_time: int
-    ) -> bool:
+    async def _reset_sliding_window(self, key: str, tenant_type: str, current_time: int) -> bool:
         """Reset sliding window rate limit keys."""
         reset_success = False
 
@@ -490,8 +490,12 @@ class RateLimiter:
         return reset_success
 
     async def get_usage(
-        self, key: str, rate: str, algorithm: Optional[str] = None, tenant_type: Optional[str] = None
-    ) -> Dict[str, Any]:
+        self,
+        key: str,
+        rate: str,
+        algorithm: Optional[str] = None,
+        tenant_type: Optional[str] = None,
+    ) -> dict[str, Any]:
         """
         Get current usage statistics for a key.
 
@@ -544,7 +548,7 @@ class RateLimiter:
 
     async def _get_fixed_window_usage(
         self, key: str, requests: int, window_seconds: int, tenant_type: str, current_time: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get usage statistics for fixed window algorithm."""
         time_window = get_time_window(window_seconds, current_time)
         full_key = generate_key(
@@ -569,9 +573,14 @@ class RateLimiter:
         }
 
     async def _get_token_bucket_usage(
-        self, key: str, max_requests: int, window_seconds: int, tenant_type: str,
-        redis_time_seconds: int, redis_time_us: int
-    ) -> Dict[str, Any]:
+        self,
+        key: str,
+        max_requests: int,
+        window_seconds: int,
+        tenant_type: str,
+        redis_time_seconds: int,
+        redis_time_us: int,
+    ) -> dict[str, Any]:
         """Get usage statistics for token bucket algorithm."""
         full_key = generate_key(
             self.config.key_prefix,
@@ -616,7 +625,7 @@ class RateLimiter:
 
     async def _get_sliding_window_usage(
         self, key: str, max_requests: int, window_seconds: int, tenant_type: str, current_time: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get usage statistics for sliding window algorithm."""
         base_key = generate_key(
             self.config.key_prefix,

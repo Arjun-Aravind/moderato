@@ -18,26 +18,32 @@ The algorithm parameter in RateLimiter.check() accepts:
 """
 
 import warnings
+from typing import Any
+
 from .base import RateLimitAlgorithm
 
-# Lazy imports with deprecation warnings
-def _deprecated_import(name):
+
+def _deprecated_import(name: str) -> None:
     warnings.warn(
         f"{name} algorithm class is deprecated and may be removed in a future version. "
         f"Use RateLimiter.check(algorithm='{name.lower()}') instead.",
         DeprecationWarning,
-        stacklevel=3
+        stacklevel=3,
     )
 
-def __getattr__(name):
+
+def __getattr__(name: str) -> Any:
     if name == "TokenBucket":
         _deprecated_import("TokenBucket")
         from .token_bucket import TokenBucket
+
         return TokenBucket
     elif name == "SlidingWindow":
         _deprecated_import("SlidingWindow")
         from .sliding_window import SlidingWindow
+
         return SlidingWindow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = ["RateLimitAlgorithm", "TokenBucket", "SlidingWindow"]

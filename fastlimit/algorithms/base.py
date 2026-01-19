@@ -3,7 +3,7 @@ Base class for rate limiting algorithms.
 """
 
 from abc import ABC, abstractmethod
-from typing import NamedTuple, Optional
+from typing import Any, NamedTuple, Optional
 
 
 class RateLimitResult(NamedTuple):
@@ -19,9 +19,7 @@ class RateLimitAlgorithm(ABC):
     """Abstract base class for rate limiting algorithms."""
 
     @abstractmethod
-    async def check(
-        self, key: str, max_requests: int, window_seconds: int
-    ) -> RateLimitResult:
+    async def check(self, key: str, max_requests: int, window_seconds: int) -> RateLimitResult:
         """
         Check if a request is allowed under the rate limit.
 
@@ -49,12 +47,14 @@ class RateLimitAlgorithm(ABC):
         pass
 
     @abstractmethod
-    async def get_usage(self, key: str) -> dict:
+    async def get_usage(self, key: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """
         Get current usage statistics for a key.
 
         Args:
             key: Unique identifier for the rate limit
+            *args: Additional positional arguments (algorithm-specific)
+            **kwargs: Additional keyword arguments (algorithm-specific)
 
         Returns:
             Dictionary with usage statistics

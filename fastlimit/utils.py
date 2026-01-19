@@ -2,13 +2,12 @@
 Utility functions for rate limiting operations.
 """
 
-import re
-from typing import Tuple
-from datetime import datetime
 import hashlib
+import re
+from typing import Optional
 
 
-def parse_rate(rate_string: str) -> Tuple[int, int]:
+def parse_rate(rate_string: str) -> tuple[int, int]:
     """
     Parse rate string into requests and window seconds.
 
@@ -66,9 +65,7 @@ def parse_rate(rate_string: str) -> Tuple[int, int]:
     return requests, period_seconds[period]
 
 
-def generate_key(
-    prefix: str, identifier: str, tenant_type: str, time_window: str
-) -> str:
+def generate_key(prefix: str, identifier: str, tenant_type: str, time_window: str) -> str:
     """
     Generate Redis key for rate limiting.
 
@@ -131,10 +128,10 @@ def _url_encode_key_component(value: str) -> str:
 
     # Encode only problematic characters, keep alphanumeric and common safe chars
     # safe='...' means these characters will NOT be encoded
-    return quote(value, safe='-_.~')
+    return quote(value, safe="-_.~")
 
 
-def get_time_window(window_seconds: int, timestamp: int = None) -> str:
+def get_time_window(window_seconds: int, timestamp: Optional[int] = None) -> str:
     """
     Generate time window key based on window size using epoch-aligned boundaries.
 
@@ -161,6 +158,7 @@ def get_time_window(window_seconds: int, timestamp: int = None) -> str:
         '1699999200'  # Aligned to 14:00:00
     """
     import time
+
     if timestamp is None:
         timestamp = int(time.time())
 

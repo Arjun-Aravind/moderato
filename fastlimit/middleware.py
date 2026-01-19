@@ -5,19 +5,21 @@ This middleware automatically adds standard rate limit headers to all HTTP respo
 following industry best practices from GitHub, Twitter, and other major APIs.
 """
 
+import logging
 import time
-from typing import Callable, Optional, Dict, Any
-from starlette.middleware.base import BaseHTTPMiddleware
+from typing import Any, Callable, Optional
+
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
-import logging
+from starlette.types import ASGIApp
 
 from .exceptions import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
 
-class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
+class RateLimitHeadersMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
     """
     Middleware to automatically add rate limit headers to responses.
 
@@ -57,7 +59,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
     successful ones, so clients always know their rate limit status.
     """
 
-    def __init__(self, app, always_add_headers: bool = True):
+    def __init__(self, app: ASGIApp, always_add_headers: bool = True) -> None:
         """
         Initialize the middleware.
 
@@ -69,7 +71,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.always_add_headers = always_add_headers
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """
         Process the request and add rate limit headers to the response.
 
@@ -116,7 +118,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
                 headers=headers,
             )
 
-    def _add_headers(self, response: Response, rate_limit_info: Dict[str, Any]) -> None:
+    def _add_headers(self, response: Response, rate_limit_info: dict[str, Any]) -> None:
         """
         Add rate limit headers to the response.
 
@@ -138,7 +140,8 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Reset"] = str(reset_timestamp)
 
         logger.debug(
-            f"Added rate limit headers: limit={limit}, remaining={remaining}, reset={reset_timestamp}"
+            f"Added rate limit headers: limit={limit}, remaining={remaining}, "
+            f"reset={reset_timestamp}"
         )
 
     def _create_rate_limit_headers(
@@ -147,7 +150,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         remaining: int,
         reset_timestamp: int,
         retry_after: Optional[int] = None,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Create rate limit headers dictionary.
 
@@ -177,7 +180,7 @@ def inject_rate_limit_headers(
     remaining: int,
     window_seconds: int,
     ttl: Optional[int] = None,
-) -> Callable:
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to inject rate limit information into request state.
 
@@ -199,8 +202,8 @@ def inject_rate_limit_headers(
             return {"data": "..."}
     """
 
-    def decorator(func: Callable) -> Callable:
-        async def wrapper(*args, **kwargs):
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
             # Execute the original function
             result = await func(*args, **kwargs)
 

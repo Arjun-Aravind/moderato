@@ -2,15 +2,16 @@
 Redis backend implementation for rate limiting.
 """
 
-import redis.asyncio as redis
-from redis.exceptions import RedisError, ConnectionError as RedisConnectionError, NoScriptError
-from pathlib import Path
-from typing import Optional, NamedTuple, Dict, Any
 import logging
-import time
+from pathlib import Path
+from typing import Any, NamedTuple, Optional
 
-from ..models import RateLimitConfig
+import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import NoScriptError, RedisError
+
 from ..exceptions import BackendError
+from ..models import RateLimitConfig
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +40,9 @@ class RedisBackend:
             config: Rate limiter configuration
         """
         self.config = config
-        self._redis: Optional[redis.Redis] = None
-        self._scripts: Dict[str, str] = {}
-        self._script_shas: Dict[str, str] = {}
+        self._redis: Optional[redis.Redis[bytes]] = None
+        self._scripts: dict[str, str] = {}
+        self._script_shas: dict[str, str] = {}
         self._connected = False
         self._load_scripts()
 
@@ -52,12 +53,14 @@ class RedisBackend:
         # Load fixed window script
         fixed_window_path = script_dir / "fixed_window.lua"
         if fixed_window_path.exists():
-            with open(fixed_window_path, "r") as f:
+            with open(fixed_window_path) as f:
                 self._scripts["fixed_window"] = f.read()
         else:
             # Fallback inline script if file doesn't exist
             # NOTE: This must stay in sync with scripts/fixed_window.lua
-            self._scripts["fixed_window"] = """
+            self._scripts[
+                "fixed_window"
+            ] = """
 -- Fixed Window Rate Limiting Script (Inline Fallback)
 local key = KEYS[1]
 local max_requests = tonumber(ARGV[1])
@@ -93,7 +96,7 @@ return {allowed, remaining, ttl * 1000}
         # Load token bucket script
         token_bucket_path = script_dir / "token_bucket.lua"
         if token_bucket_path.exists():
-            with open(token_bucket_path, "r") as f:
+            with open(token_bucket_path) as f:
                 self._scripts["token_bucket"] = f.read()
         else:
             # No fallback for token bucket - requires file
@@ -102,7 +105,7 @@ return {allowed, remaining, ttl * 1000}
         # Load sliding window script
         sliding_window_path = script_dir / "sliding_window.lua"
         if sliding_window_path.exists():
-            with open(sliding_window_path, "r") as f:
+            with open(sliding_window_path) as f:
                 self._scripts["sliding_window"] = f.read()
         else:
             # No fallback for sliding window - requires file
@@ -143,9 +146,9 @@ return {allowed, remaining, ttl * 1000}
             logger.info(f"Connected to Redis at {_redact_redis_url(self.config.redis_url)}")
 
         except RedisConnectionError as e:
-            raise BackendError(f"Failed to connect to Redis: {e}")
+            raise BackendError(f"Failed to connect to Redis: {e}") from e
         except Exception as e:
-            raise BackendError(f"Unexpected error during Redis connection: {e}")
+            raise BackendError(f"Unexpected error during Redis connection: {e}") from e
 
     async def _register_scripts(self) -> None:
         """Register Lua scripts with Redis for optimal performance."""
@@ -155,7 +158,7 @@ return {allowed, remaining, ttl * 1000}
         for name, script in self._scripts.items():
             try:
                 # Register script and store SHA for EVALSHA calls
-                sha = await self._redis.script_load(script)
+                sha = await self._redis.script_load(script)  # type: ignore[no-untyped-call]
                 self._script_shas[name] = sha
                 logger.debug(f"Registered script '{name}' with SHA: {sha}")
             except Exception as e:
@@ -198,7 +201,7 @@ return {allowed, remaining, ttl * 1000}
             # Try EVALSHA first for better performance
             if "fixed_window" in self._script_shas:
                 try:
-                    result = await self._redis.evalsha(
+                    result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
                         self._script_shas["fixed_window"],
                         1,  # number of keys
                         key.encode(),  # KEYS[1]
@@ -210,10 +213,14 @@ return {allowed, remaining, ttl * 1000}
                 except NoScriptError:
                     # Script not in cache, fall back to EVAL
                     logger.debug("Script not in cache, using EVAL")
-                    result = await self._execute_script("fixed_window", key, max_requests, window_seconds, window_end, cost)
+                    result = await self._execute_script(
+                        "fixed_window", key, max_requests, window_seconds, window_end, cost
+                    )
             else:
                 # No SHA available, use EVAL
-                result = await self._execute_script("fixed_window", key, max_requests, window_seconds, window_end, cost)
+                result = await self._execute_script(
+                    "fixed_window", key, max_requests, window_seconds, window_end, cost
+                )
 
             # Parse result
             if not isinstance(result, list) or len(result) != 3:
@@ -231,13 +238,19 @@ return {allowed, remaining, ttl * 1000}
 
         except RedisError as e:
             logger.error(f"Redis error during rate limit check: {e}")
-            raise BackendError(f"Rate limit check failed: {e}")
+            raise BackendError(f"Rate limit check failed: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected error during rate limit check: {e}")
-            raise BackendError(f"Unexpected error: {e}")
+            raise BackendError(f"Unexpected error: {e}") from e
 
     async def _execute_script(
-        self, script_name: str, key: str, max_requests: int, window_seconds: int, window_end: int, cost: int = 1000
+        self,
+        script_name: str,
+        key: str,
+        max_requests: int,
+        window_seconds: int,
+        window_end: int,
+        cost: int = 1000,
     ) -> Any:
         """Execute Lua script with EVAL."""
         if not self._redis:
@@ -247,7 +260,7 @@ return {allowed, remaining, ttl * 1000}
         if not script:
             raise BackendError(f"Script '{script_name}' not found")
 
-        return await self._redis.eval(
+        return await self._redis.eval(  # type: ignore[no-untyped-call]
             script,
             1,  # number of keys
             key.encode(),  # KEYS[1]
@@ -293,7 +306,7 @@ return {allowed, remaining, ttl * 1000}
             # Try EVALSHA first for better performance
             if "token_bucket" in self._script_shas:
                 try:
-                    result = await self._redis.evalsha(
+                    result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
                         self._script_shas["token_bucket"],
                         1,  # number of keys
                         key.encode(),  # KEYS[1]
@@ -307,7 +320,12 @@ return {allowed, remaining, ttl * 1000}
                     # Script not in cache, fall back to EVAL
                     logger.debug("Script not in cache, using EVAL")
                     result = await self._execute_token_bucket_script(
-                        key, max_tokens, refill_rate_per_second, window_seconds, current_time_ms, cost
+                        key,
+                        max_tokens,
+                        refill_rate_per_second,
+                        window_seconds,
+                        current_time_ms,
+                        cost,
                     )
             else:
                 # No SHA available, use EVAL
@@ -331,10 +349,10 @@ return {allowed, remaining, ttl * 1000}
 
         except RedisError as e:
             logger.error(f"Redis error during token bucket check: {e}")
-            raise BackendError(f"Token bucket check failed: {e}")
+            raise BackendError(f"Token bucket check failed: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected error during token bucket check: {e}")
-            raise BackendError(f"Unexpected error: {e}")
+            raise BackendError(f"Unexpected error: {e}") from e
 
     async def _execute_token_bucket_script(
         self,
@@ -353,7 +371,7 @@ return {allowed, remaining, ttl * 1000}
         if not script:
             raise BackendError("Token bucket script not loaded")
 
-        return await self._redis.eval(
+        return await self._redis.eval(  # type: ignore[no-untyped-call]
             script,
             1,  # number of keys
             key.encode(),  # KEYS[1]
@@ -364,7 +382,7 @@ return {allowed, remaining, ttl * 1000}
             str(cost).encode(),  # ARGV[5]
         )
 
-    async def get_token_bucket_usage(self, key: str) -> Dict[str, Any]:
+    async def get_token_bucket_usage(self, key: str) -> dict[str, Any]:
         """
         Get current token bucket usage statistics.
 
@@ -393,7 +411,7 @@ return {allowed, remaining, ttl * 1000}
             }
         except RedisError as e:
             logger.error(f"Failed to get token bucket usage for key {key}: {e}")
-            raise BackendError(f"Failed to get usage statistics: {e}")
+            raise BackendError(f"Failed to get usage statistics: {e}") from e
 
     async def check_sliding_window(
         self,
@@ -431,7 +449,7 @@ return {allowed, remaining, ttl * 1000}
             # Try EVALSHA first for better performance
             if "sliding_window" in self._script_shas:
                 try:
-                    result = await self._redis.evalsha(
+                    result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
                         self._script_shas["sliding_window"],
                         2,  # number of keys (current + previous)
                         current_key.encode(),  # KEYS[1]
@@ -469,10 +487,10 @@ return {allowed, remaining, ttl * 1000}
 
         except RedisError as e:
             logger.error(f"Redis error during sliding window check: {e}")
-            raise BackendError(f"Sliding window check failed: {e}")
+            raise BackendError(f"Sliding window check failed: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected error during sliding window check: {e}")
-            raise BackendError(f"Unexpected error: {e}")
+            raise BackendError(f"Unexpected error: {e}") from e
 
     async def _execute_sliding_window_script(
         self,
@@ -491,7 +509,7 @@ return {allowed, remaining, ttl * 1000}
         if not script:
             raise BackendError("Sliding window script not loaded")
 
-        return await self._redis.eval(
+        return await self._redis.eval(  # type: ignore[no-untyped-call]
             script,
             2,  # number of keys
             current_key.encode(),  # KEYS[1]
@@ -523,9 +541,9 @@ return {allowed, remaining, ttl * 1000}
             return bool(result)
         except RedisError as e:
             logger.error(f"Failed to reset key {key}: {e}")
-            raise BackendError(f"Failed to reset rate limit: {e}")
+            raise BackendError(f"Failed to reset rate limit: {e}") from e
 
-    async def get_usage(self, key: str) -> Dict[str, Any]:
+    async def get_usage(self, key: str) -> dict[str, Any]:
         """
         Get current usage statistics for a key.
 
@@ -557,7 +575,7 @@ return {allowed, remaining, ttl * 1000}
             }
         except RedisError as e:
             logger.error(f"Failed to get usage for key {key}: {e}")
-            raise BackendError(f"Failed to get usage statistics: {e}")
+            raise BackendError(f"Failed to get usage statistics: {e}") from e
 
     async def get_redis_time(self) -> tuple[int, int]:
         """
@@ -581,7 +599,7 @@ return {allowed, remaining, ttl * 1000}
             return (int(result[0]), int(result[1]))
         except RedisError as e:
             logger.error(f"Failed to get Redis time: {e}")
-            raise BackendError(f"Failed to get Redis time: {e}")
+            raise BackendError(f"Failed to get Redis time: {e}") from e
 
     async def get_redis_time_ms(self) -> int:
         """
@@ -609,7 +627,7 @@ return {allowed, remaining, ttl * 1000}
         try:
             await self._redis.ping()
             return True
-        except:
+        except Exception:
             return False
 
 

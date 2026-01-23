@@ -5,17 +5,19 @@ This module provides comprehensive metrics collection for monitoring
 rate limiter performance, usage patterns, and system health.
 """
 
-import time
 import logging
-from typing import Optional, Dict, Any, Callable
-from functools import wraps
+import time
+from collections.abc import Generator
 from contextlib import contextmanager
+from functools import wraps
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
 # Check if prometheus_client is available
 try:
-    from prometheus_client import Counter, Histogram, Gauge, REGISTRY, generate_latest
+    from prometheus_client import Counter, Gauge, Histogram
+
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     PROMETHEUS_AVAILABLE = False
@@ -162,7 +164,7 @@ class RateLimitMetrics:
         logger.debug(f"Initialized {len(self.__dict__)} Prometheus metrics")
 
     @contextmanager
-    def track_check_duration(self, algorithm: str = "fixed_window"):
+    def track_check_duration(self, algorithm: str = "fixed_window") -> Generator[None, None, None]:
         """
         Context manager to track rate limit check duration.
 
@@ -185,7 +187,7 @@ class RateLimitMetrics:
             self.checks_duration.labels(algorithm=algorithm).observe(duration)
 
     @contextmanager
-    def track_backend_operation(self, operation: str):
+    def track_backend_operation(self, operation: str) -> Generator[None, None, None]:
         """
         Context manager to track backend operation duration and status.
 
@@ -209,12 +211,10 @@ class RateLimitMetrics:
             raise
         finally:
             duration = time.perf_counter() - start_time
-            self.backend_operations_total.labels(
-                operation=operation, status=status
-            ).inc()
+            self.backend_operations_total.labels(operation=operation, status=status).inc()
             self.backend_operation_duration.labels(operation=operation).observe(duration)
 
-    def record_check(self, algorithm: str, allowed: bool):
+    def record_check(self, algorithm: str, allowed: bool) -> None:
         """
         Record a rate limit check.
 
@@ -228,7 +228,7 @@ class RateLimitMetrics:
         result = "allowed" if allowed else "denied"
         self.checks_total.labels(algorithm=algorithm, result=result).inc()
 
-    def record_limit_exceeded(self, algorithm: str, tenant_type: str = "default"):
+    def record_limit_exceeded(self, algorithm: str, tenant_type: str = "default") -> None:
         """
         Record a rate limit violation.
 
@@ -239,11 +239,9 @@ class RateLimitMetrics:
         if not self.enabled:
             return
 
-        self.limit_exceeded_total.labels(
-            algorithm=algorithm, tenant_type=tenant_type
-        ).inc()
+        self.limit_exceeded_total.labels(algorithm=algorithm, tenant_type=tenant_type).inc()
 
-    def record_redis_operation(self, command: str, success: bool):
+    def record_redis_operation(self, command: str, success: bool) -> None:
         """
         Record a Redis operation.
 
@@ -257,14 +255,14 @@ class RateLimitMetrics:
         status = "success" if success else "error"
         self.redis_operations_total.labels(command=command, status=status).inc()
 
-    def record_redis_error(self):
+    def record_redis_error(self) -> None:
         """Record a Redis connection error."""
         if not self.enabled:
             return
 
         self.redis_connection_errors.inc()
 
-    def record_script_execution(self, script_name: str, used_cache: bool):
+    def record_script_execution(self, script_name: str, used_cache: bool) -> None:
         """
         Record Lua script execution.
 
@@ -280,7 +278,7 @@ class RateLimitMetrics:
             script_name=script_name, execution_type=execution_type
         ).inc()
 
-    def update_usage_gauge(self, key: str, algorithm: str, current: int, limit: int):
+    def update_usage_gauge(self, key: str, algorithm: str, current: int, limit: int) -> None:
         """
         Update current usage gauges.
 
@@ -299,7 +297,7 @@ class RateLimitMetrics:
         self.current_usage.labels(key=safe_key, algorithm=algorithm).set(current)
         self.limit_value.labels(key=safe_key, algorithm=algorithm).set(limit)
 
-    def set_active_connections(self, count: int):
+    def set_active_connections(self, count: int) -> None:
         """
         Update active Redis connections count.
 
@@ -311,7 +309,7 @@ class RateLimitMetrics:
 
         self.active_connections.set(count)
 
-    def get_metrics_dict(self) -> Dict[str, Any]:
+    def get_metrics_dict(self) -> dict[str, Any]:
         """
         Get current metrics as a dictionary.
 
@@ -332,7 +330,9 @@ class RateLimitMetrics:
         }
 
 
-def metrics_decorator(metrics: Optional[RateLimitMetrics], operation: str):
+def metrics_decorator(
+    metrics: Optional[RateLimitMetrics], operation: str
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to automatically track metrics for a function.
 
@@ -346,18 +346,17 @@ def metrics_decorator(metrics: Optional[RateLimitMetrics], operation: str):
             ...
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         if not metrics or not metrics.enabled:
-            # No-op if metrics disabled
             return func
 
         @wraps(func)
-        async def async_wrapper(*args, **kwargs):
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             with metrics.track_backend_operation(operation):
                 return await func(*args, **kwargs)
 
         @wraps(func)
-        def sync_wrapper(*args, **kwargs):
+        def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             with metrics.track_backend_operation(operation):
                 return func(*args, **kwargs)
 

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fastlimit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Production-ready rate limiting library for Python with Redis backend"
 authors = ["Arjun <arjun@example.com>"]
 readme = "README.md"
@@ -40,6 +40,7 @@ ruff = "^0.1"
 mypy = "^1.5"
 pre-commit = "^3.5"
 types-redis = "^4.6"
+commitizen = {version = ">=4.0.0", python = ">=3.10"}
 
 [tool.poetry.group.examples.dependencies]
 fastapi = "^0.104"
@@ -97,6 +98,9 @@ addopts = "-ra -q --strict-markers"
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [tool.coverage.run]
 source = ["fastlimit"]
@@ -110,3 +114,15 @@ exclude_lines = [
     "raise AssertionError",
     "raise NotImplementedError",
 ]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.2.0"
+tag_format = "v$version"
+version_files = [
+    "fastlimit/__init__.py:__version__",
+    "pyproject.toml:^version"
+]
+update_changelog_on_bump = true
+changelog_incremental = true
+major_version_zero = true

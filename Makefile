@@ -1,6 +1,9 @@
 # FastLimit Development Makefile
 
-.PHONY: help install dev test lint format clean docker-up docker-down docker-test benchmark
+.PHONY: help install dev test lint format clean docker-up docker-down docker-test benchmark commit bump release
+
+# Ensure poetry is in PATH
+export PATH := $(HOME)/.local/bin:$(PATH)
 
 # Colors for terminal output
 RED := \033[0;31m
@@ -31,6 +34,43 @@ test: ## Run test suite
 test-cov: ## Run tests with coverage
 	@echo "$(GREEN)Running tests with coverage...$(NC)"
 	poetry run pytest tests/ --cov=fastlimit --cov-report=html --cov-report=term
+
+# Individual test categories
+test-unit: ## Run unit tests (no Redis required)
+	@echo "$(GREEN)Running unit tests...$(NC)"
+	poetry run pytest tests/test_utils.py -v
+
+test-fixed-window: ## Run fixed window algorithm tests
+	@echo "$(GREEN)Running fixed window tests...$(NC)"
+	poetry run pytest tests/test_fixed_window.py -v
+
+test-token-bucket: ## Run token bucket algorithm tests
+	@echo "$(GREEN)Running token bucket tests...$(NC)"
+	poetry run pytest tests/test_token_bucket.py -v
+
+test-sliding-window: ## Run sliding window algorithm tests
+	@echo "$(GREEN)Running sliding window tests...$(NC)"
+	poetry run pytest tests/test_sliding_window.py -v
+
+test-concurrency: ## Run concurrency and atomicity tests
+	@echo "$(GREEN)Running concurrency tests...$(NC)"
+	poetry run pytest tests/test_concurrency.py -v --timeout=60
+
+test-edge-cases: ## Run edge case and error handling tests
+	@echo "$(GREEN)Running edge case tests...$(NC)"
+	poetry run pytest tests/test_edge_cases.py -v
+
+test-security: ## Run security tests
+	@echo "$(GREEN)Running security tests...$(NC)"
+	poetry run pytest tests/test_security.py -v
+
+test-algorithms: ## Run all algorithm tests
+	@echo "$(GREEN)Running all algorithm tests...$(NC)"
+	poetry run pytest tests/test_fixed_window.py tests/test_token_bucket.py tests/test_sliding_window.py -v
+
+test-all: ## Run complete test suite
+	@echo "$(GREEN)Running complete test suite...$(NC)"
+	poetry run pytest tests/ -v --tb=short
 
 lint: ## Run linting checks
 	@echo "$(GREEN)Running linting checks...$(NC)"
@@ -77,7 +117,18 @@ docker-build: ## Build Docker images
 
 benchmark: ## Run performance benchmark
 	@echo "$(GREEN)Running performance benchmark...$(NC)"
+	poetry run python benchmarks/performance.py
+
+benchmark-quick: ## Run quick performance benchmark
+	@echo "$(GREEN)Running quick performance benchmark...$(NC)"
+	poetry run python benchmarks/performance.py --quick
+
+benchmark-docker: ## Run performance benchmark in Docker
+	@echo "$(GREEN)Running performance benchmark in Docker...$(NC)"
 	docker-compose --profile benchmark run --rm benchmark
+
+ci: test-all benchmark-quick ## Run CI checks (tests + quick benchmark)
+	@echo "$(GREEN)CI checks completed$(NC)"
 
 demo: ## Run the algorithms demo
 	@echo "$(GREEN)Running algorithms demo...$(NC)"
@@ -91,13 +142,44 @@ run-tenant: ## Run the multi-tenant example
 	@echo "$(GREEN)Starting multi-tenant demo...$(NC)"
 	poetry run uvicorn examples.multi_tenant:app --reload --port 8001
 
-pre-commit: ## Install pre-commit hooks
+pre-commit: ## Install pre-commit hooks (includes commit-msg hook)
 	@echo "$(GREEN)Installing pre-commit hooks...$(NC)"
 	poetry run pre-commit install
+	poetry run pre-commit install --hook-type commit-msg
 
 pre-commit-run: ## Run pre-commit on all files
 	@echo "$(GREEN)Running pre-commit checks...$(NC)"
 	poetry run pre-commit run --all-files
+
+# =============================================================================
+# Commitizen / Release Commands
+# =============================================================================
+
+commit: ## Interactive conventional commit (use instead of git commit)
+	@echo "$(GREEN)Starting interactive commit...$(NC)"
+	poetry run cz commit
+
+bump: ## Bump version based on conventional commits
+	@echo "$(GREEN)Bumping version...$(NC)"
+	poetry run cz bump --changelog
+	@echo "$(GREEN)Version bumped! Don't forget to push tags: git push && git push --tags$(NC)"
+
+bump-dry: ## Show what version bump would happen (dry run)
+	@echo "$(YELLOW)Dry run - showing what would happen:$(NC)"
+	poetry run cz bump --dry-run
+
+release: ## Full release workflow (bump + push)
+	@echo "$(YELLOW)This will bump version, update changelog, and push to remote$(NC)"
+	@echo "$(RED)Press Ctrl+C to cancel$(NC)"
+	@sleep 3
+	poetry run cz bump --changelog
+	git push origin $$(git branch --show-current)
+	git push origin --tags
+	@echo "$(GREEN)Release complete!$(NC)"
+
+check-commits: ## Validate commit messages
+	@echo "$(GREEN)Checking commit messages...$(NC)"
+	poetry run cz check --rev-range HEAD~5..HEAD
 
 publish-test: ## Publish to TestPyPI
 	@echo "$(YELLOW)Publishing to TestPyPI...$(NC)"

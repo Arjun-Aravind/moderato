@@ -2,13 +2,12 @@
 Utility functions for rate limiting operations.
 """
 
-import re
-from typing import Tuple
-from datetime import datetime
 import hashlib
+import re
+from typing import Optional
 
 
-def parse_rate(rate_string: str) -> Tuple[int, int]:
+def parse_rate(rate_string: str) -> tuple[int, int]:
     """
     Parse rate string into requests and window seconds.
 
@@ -66,93 +65,106 @@ def parse_rate(rate_string: str) -> Tuple[int, int]:
     return requests, period_seconds[period]
 
 
-def generate_key(
-    prefix: str, identifier: str, tenant_type: str, time_window: str
-) -> str:
+def generate_key(prefix: str, identifier: str, tenant_type: str, time_window: str) -> str:
     """
     Generate Redis key for rate limiting.
 
     Creates a hierarchical key structure for efficient Redis operations
     and clear organization of rate limit data.
 
+    Uses URL-safe encoding to prevent key collisions while keeping keys readable.
+    This is important because simple character replacement (e.g., : -> _) can
+    cause different identifiers to map to the same key.
+
     Args:
         prefix: Key prefix (e.g., "ratelimit")
         identifier: Unique identifier (e.g., IP address, user ID)
         tenant_type: Tenant type/tier (e.g., "free", "premium", "enterprise")
-        time_window: Time window identifier (e.g., "2024-11-01-14:35")
+        time_window: Time window identifier (e.g., "1700000100")
 
     Returns:
         Formatted Redis key
 
     Examples:
-        >>> generate_key("ratelimit", "192.168.1.1", "free", "2024-11-01-14:35")
-        'ratelimit:192_168_1_1:free:2024-11-01-14:35'
-    """
-    # Sanitize identifier to prevent key injection and Redis key issues
-    # Replace problematic characters with underscores
-    safe_id = (
-        identifier.replace(":", "_")
-        .replace(" ", "_")
-        .replace("/", "_")
-        .replace("\\", "_")
-        .replace("[", "_")
-        .replace("]", "_")
-        .replace("{", "_")
-        .replace("}", "_")
-        .replace("*", "_")
-        .replace("?", "_")
-        .replace(".", "_")  # Also replace dots for cleaner keys
-    )
+        >>> generate_key("ratelimit", "192.168.1.1", "free", "1700000100")
+        'ratelimit:192.168.1.1:free:1700000100'
 
-    # Ensure tenant_type is also safe
-    safe_tenant = tenant_type.replace(":", "_").replace(" ", "_")
+        >>> generate_key("ratelimit", "user:123", "premium", "1700000100")
+        'ratelimit:user%3A123:premium:1700000100'  # Colon encoded to prevent collision
+    """
+    # Use URL-safe encoding for identifier and tenant_type
+    # This prevents collisions: "a:b" != "a_b" after encoding
+    safe_id = _url_encode_key_component(identifier)
+    safe_tenant = _url_encode_key_component(tenant_type)
 
     # Generate the key and apply hash optimization for long keys
     full_key = f"{prefix}:{safe_id}:{safe_tenant}:{time_window}"
     return hash_key(full_key, max_length=200)
 
 
-def get_time_window(window_seconds: int) -> str:
+def _url_encode_key_component(value: str) -> str:
     """
-    Generate time window key based on window size.
+    URL-encode a key component to prevent Redis key issues and collisions.
 
-    Creates consistent time window identifiers for grouping
-    rate limit counters.
+    Only encodes characters that would cause issues:
+    - Colon (:) - used as key delimiter
+    - Space ( ) - causes parsing issues
+    - Special Redis pattern chars (* ? [ ] { })
+
+    Args:
+        value: The string to encode
+
+    Returns:
+        URL-safe encoded string
+
+    Examples:
+        >>> _url_encode_key_component("user:123")
+        'user%3A123'
+
+        >>> _url_encode_key_component("normal_key")
+        'normal_key'
+    """
+    from urllib.parse import quote
+
+    # Encode only problematic characters, keep alphanumeric and common safe chars
+    # safe='...' means these characters will NOT be encoded
+    return quote(value, safe="-_.~")
+
+
+def get_time_window(window_seconds: int, timestamp: Optional[int] = None) -> str:
+    """
+    Generate time window key based on window size using epoch-aligned boundaries.
+
+    Uses epoch-based alignment to ensure consistent window boundaries:
+    - window_start = timestamp - (timestamp % window_seconds)
+
+    This prevents the "boundary burst" problem where requests at the end
+    of one window and start of another can exceed the intended rate.
 
     Args:
         window_seconds: Size of the time window in seconds
+        timestamp: Unix timestamp (defaults to current time)
 
     Returns:
-        Time window identifier string
+        Window start timestamp as string (for use in Redis key)
 
     Examples:
-        >>> # For a 60-second window at 2024-11-01 14:35:42
-        >>> get_time_window(60)
-        '2024-11-01-14:35'  # Minute precision
+        >>> # For a 60-second window at timestamp 1700000142 (14:35:42)
+        >>> get_time_window(60, 1700000142)
+        '1700000100'  # Aligned to 14:35:00
 
-        >>> # For a 3600-second (1 hour) window
-        >>> get_time_window(3600)
-        '2024-11-01-14'  # Hour precision
+        >>> # For a 3600-second (1 hour) window at timestamp 1700000142
+        >>> get_time_window(3600, 1700000142)
+        '1699999200'  # Aligned to 14:00:00
     """
-    now = datetime.utcnow()
+    import time
 
-    if window_seconds <= 1:
-        # Per second - include seconds
-        return now.strftime("%Y-%m-%d-%H:%M:%S")
-    elif window_seconds <= 60:
-        # Per minute - minute precision
-        return now.strftime("%Y-%m-%d-%H:%M")
-    elif window_seconds <= 3600:
-        # Per hour - hour precision
-        return now.strftime("%Y-%m-%d-%H")
-    elif window_seconds <= 86400:
-        # Per day - day precision
-        return now.strftime("%Y-%m-%d")
-    else:
-        # Longer periods - week precision
-        # Use ISO week number for consistent weekly windows
-        year, week, _ = now.isocalendar()
-        return f"{year}-W{week:02d}"
+    if timestamp is None:
+        timestamp = int(time.time())
+
+    # Align to window boundary using epoch
+    window_start = timestamp - (timestamp % window_seconds)
+    return str(window_start)
 
 
 def hash_key(key: str, max_length: int = 200) -> str:

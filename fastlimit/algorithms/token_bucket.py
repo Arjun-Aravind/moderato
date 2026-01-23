@@ -5,9 +5,12 @@ The token bucket algorithm provides smoother rate limiting compared to
 fixed window, with better handling of bursty traffic.
 """
 
-import time
-from typing import Optional
 import logging
+import time
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..backends.redis import RedisBackend
 
 from .base import RateLimitAlgorithm, RateLimitResult
 
@@ -41,7 +44,7 @@ class TokenBucket(RateLimitAlgorithm):
     - Can allow more requests in first window
     """
 
-    def __init__(self, backend):
+    def __init__(self, backend: "RedisBackend") -> None:
         """
         Initialize Token Bucket algorithm.
 
@@ -79,19 +82,20 @@ class TokenBucket(RateLimitAlgorithm):
             - Refills at 1666.67 tokens/sec
             - Max capacity: 100000 tokens
         """
-        # Calculate refill rate (tokens per second)
-        # For 100/minute: 100000 / 60 = 1666.67 tokens/sec
-        refill_rate = max_requests / window_seconds
+        # Calculate refill rate (tokens per second as integer)
+        # For 100/minute: 100000 / 60 = 1666 tokens/sec
+        refill_rate_per_second = max_requests // window_seconds
 
-        # Get current timestamp
-        current_time = int(time.time())
+        # Get current timestamp in milliseconds
+        current_time_ms = int(time.time() * 1000)
 
         # Execute token bucket Lua script
         result = await self.backend.check_token_bucket(
             key=key,
             max_tokens=max_requests,
-            refill_rate=refill_rate,
-            current_time=current_time,
+            refill_rate_per_second=refill_rate_per_second,
+            window_seconds=window_seconds,
+            current_time_ms=current_time_ms,
             cost=cost,
         )
 
@@ -100,7 +104,7 @@ class TokenBucket(RateLimitAlgorithm):
         # If denied, reset_at = current_time + retry_after
         reset_at = None
         if not result.allowed:
-            reset_at = current_time + (result.retry_after // 1000)
+            reset_at = (current_time_ms // 1000) + (result.retry_after // 1000)
 
         return RateLimitResult(
             allowed=result.allowed,
@@ -124,13 +128,14 @@ class TokenBucket(RateLimitAlgorithm):
         """
         return await self.backend.reset(key)
 
-    async def get_usage(self, key: str, max_requests: int) -> dict:
+    async def get_usage(self, key: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
         """
         Get current usage statistics for a token bucket.
 
         Args:
             key: Unique identifier for the rate limit
-            max_requests: Maximum tokens (with multiplier)
+            *args: Expected to contain max_requests as first argument
+            **kwargs: Not used
 
         Returns:
             Dictionary with:
@@ -142,6 +147,7 @@ class TokenBucket(RateLimitAlgorithm):
         Note: For token bucket, "current" means tokens available,
         not requests consumed (inverse of fixed window).
         """
+        max_requests: int = args[0] if args else kwargs.get("max_requests", 0)
         usage = await self.backend.get_token_bucket_usage(key)
 
         # Convert from integer math (divide by 1000)
@@ -183,9 +189,7 @@ def calculate_refill_rate(requests: int, window_seconds: int) -> float:
     return requests / window_seconds
 
 
-def calculate_bucket_capacity(
-    requests: int, burst_factor: float = 1.0
-) -> int:
+def calculate_bucket_capacity(requests: int, burst_factor: float = 1.0) -> int:
     """
     Calculate bucket capacity with optional burst allowance.
 
@@ -217,8 +221,7 @@ def calculate_bucket_capacity(
     """
     if burst_factor < 1.0:
         logger.warning(
-            f"Burst factor {burst_factor} < 1.0 may cause issues. "
-            "Consider using >= 1.0"
+            f"Burst factor {burst_factor} < 1.0 may cause issues. " "Consider using >= 1.0"
         )
 
     return int(requests * burst_factor)

@@ -23,21 +23,22 @@ FastAPI integration:
     >>>     return {"data": "..."}
 """
 
+from .exceptions import BackendError, RateLimitConfigError, RateLimitExceeded
 from .limiter import RateLimiter
-from .exceptions import RateLimitExceeded, RateLimitConfigError, BackendError
-from .models import RateLimitConfig
 from .middleware import RateLimitHeadersMiddleware
+from .models import CheckResult, RateLimitConfig
 
 # Metrics are optional - only import if prometheus_client is available
 try:
     from .metrics import RateLimitMetrics, init_metrics
+
     _METRICS_AVAILABLE = True
 except ImportError:
     _METRICS_AVAILABLE = False
-    RateLimitMetrics = None
-    init_metrics = None
+    RateLimitMetrics = None  # type: ignore[misc, assignment]
+    init_metrics = None  # type: ignore[assignment]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Arjun"
 __email__ = "arjun@example.com"
 
@@ -47,6 +48,7 @@ __all__ = [
     "RateLimitConfigError",
     "BackendError",
     "RateLimitConfig",
+    "CheckResult",
     "RateLimitHeadersMiddleware",
 ]
 

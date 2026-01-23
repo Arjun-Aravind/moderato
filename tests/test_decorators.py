@@ -2,12 +2,10 @@
 Tests for rate limiting decorators.
 """
 
-import pytest
-import asyncio
-from unittest.mock import Mock, AsyncMock
 
-from fastlimit import RateLimiter, RateLimitExceeded
-from fastlimit.decorators import create_limit_decorator
+import pytest
+
+from fastlimit import RateLimitExceeded
 
 
 class TestDecorators:
@@ -39,10 +37,7 @@ class TestDecorators:
         limiter = clean_limiter
 
         # Decorator with custom key function
-        @limiter.limit(
-            "3/minute",
-            key=lambda req: req.headers.get("X-User-ID", "anonymous")
-        )
+        @limiter.limit("3/minute", key=lambda req: req.headers.get("X-User-ID", "anonymous"))
         async def my_endpoint(request):
             return {"user": request.headers.get("X-User-ID", "anonymous")}
 
@@ -69,15 +64,13 @@ class TestDecorators:
         @limiter.limit(
             "5/minute",
             key=lambda req: req.headers.get("X-API-Key"),
-            tenant_type=lambda req: req.headers.get("X-Tenant-Tier", "free")
+            tenant_type=lambda req: req.headers.get("X-Tenant-Tier", "free"),
         )
         async def api_endpoint(request):
             return {"tier": request.headers.get("X-Tenant-Tier", "free")}
 
         # Premium tenant requests
-        premium_request = make_request(
-            headers={"X-API-Key": "key1", "X-Tenant-Tier": "premium"}
-        )
+        premium_request = make_request(headers={"X-API-Key": "key1", "X-Tenant-Tier": "premium"})
         for _ in range(5):
             result = await api_endpoint(premium_request)
             assert result["tier"] == "premium"
@@ -87,9 +80,7 @@ class TestDecorators:
             await api_endpoint(premium_request)
 
         # Free tenant with same API key should work (different tenant type)
-        free_request = make_request(
-            headers={"X-API-Key": "key1", "X-Tenant-Tier": "free"}
-        )
+        free_request = make_request(headers={"X-API-Key": "key1", "X-Tenant-Tier": "free"})
         result = await api_endpoint(free_request)
         assert result["tier"] == "free"
 
@@ -98,10 +89,7 @@ class TestDecorators:
         """Test decorator with dynamic cost calculation."""
         limiter = clean_limiter
 
-        @limiter.limit(
-            "10/minute",
-            cost=lambda req: 5 if req.headers.get("X-Premium") else 1
-        )
+        @limiter.limit("10/minute", cost=lambda req: 5 if req.headers.get("X-Premium") else 1)
         async def expensive_endpoint(request):
             return {"premium": bool(request.headers.get("X-Premium"))}
 
@@ -148,10 +136,7 @@ class TestDecorators:
         """Test decorator extracting key from path parameters."""
         limiter = clean_limiter
 
-        @limiter.limit(
-            "3/minute",
-            key=lambda req: req.path_params.get("user_id")
-        )
+        @limiter.limit("3/minute", key=lambda req: req.path_params.get("user_id"))
         async def get_user(request):
             return {"user_id": request.path_params.get("user_id")}
 
@@ -210,16 +195,13 @@ class TestDecorators:
 
         # Key function that raises an error
         @limiter.limit(
-            "5/minute",
-            key=lambda req: req.nonexistent_attribute  # This will raise AttributeError
+            "5/minute", key=lambda req: req.nonexistent_attribute  # This will raise AttributeError
         )
         async def endpoint_with_error(request):
             return {"status": "ok"}
 
         # Should fall back to default key extraction (IP)
-        request = type("Request", (), {
-            "client": type("Client", (), {"host": "192.168.1.1"})()
-        })()
+        request = type("Request", (), {"client": type("Client", (), {"host": "192.168.1.1"})()})()
 
         # Should work despite error in key function
         result = await endpoint_with_error(request)
@@ -235,35 +217,48 @@ class TestDecorators:
             return {"status": "ok"}
 
         # Test with regular client IP
-        request1 = type("Request", (), {
-            "client": type("Client", (), {"host": "192.168.1.1"})(),
-            "state": type("State", (), {})()
-        })()
+        request1 = type(
+            "Request",
+            (),
+            {
+                "client": type("Client", (), {"host": "192.168.1.1"})(),
+                "state": type("State", (), {})(),
+            },
+        )()
         result = await ip_limited(request1)
         assert result == {"status": "ok"}
 
         # Test with X-Forwarded-For header
-        request2 = type("Request", (), {
-            "client": None,
-            "headers": {"X-Forwarded-For": "10.0.0.1, 192.168.1.1"},
-            "state": type("State", (), {})()
-        })()
+        request2 = type(
+            "Request",
+            (),
+            {
+                "client": None,
+                "headers": {"X-Forwarded-For": "10.0.0.1, 192.168.1.1"},
+                "state": type("State", (), {})(),
+            },
+        )()
         result = await ip_limited(request2)
         assert result == {"status": "ok"}
 
         # Test with X-Real-IP header
-        request3 = type("Request", (), {
-            "client": None,
-            "headers": {"X-Real-IP": "172.16.0.1"},
-            "state": type("State", (), {})()
-        })()
+        request3 = type(
+            "Request",
+            (),
+            {
+                "client": None,
+                "headers": {"X-Real-IP": "172.16.0.1"},
+                "state": type("State", (), {})(),
+            },
+        )()
         result = await ip_limited(request3)
         assert result == {"status": "ok"}
 
         # Test with no IP information (falls back to "unknown")
-        request4 = type("Request", (), {
-            "state": type("State", (), {})()
-        })()
+        # Must have client or headers attribute to be recognized as a request
+        request4 = type(
+            "Request", (), {"client": None, "headers": {}, "state": type("State", (), {})()}
+        )()
         result = await ip_limited(request4)
         assert result == {"status": "ok"}
 
@@ -278,10 +273,14 @@ class TestDecorators:
             return {"status": "ok", "type": "sync"}
 
         # Create a request
-        request = type("Request", (), {
-            "client": type("Client", (), {"host": "127.0.0.1"})(),
-            "state": type("State", (), {})()
-        })()
+        request = type(
+            "Request",
+            (),
+            {
+                "client": type("Client", (), {"host": "127.0.0.1"})(),
+                "state": type("State", (), {})(),
+            },
+        )()
 
         # Should work as async function
         result = await sync_endpoint(request)
@@ -303,6 +302,7 @@ class TestDecorators:
 
         # Test with invalid algorithm
         with pytest.raises(Exception) as exc_info:
+
             @limiter.limit("10/minute", algorithm="invalid_algo")
             async def bad_endpoint(request):
                 return {}

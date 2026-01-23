@@ -38,7 +38,7 @@ except ImportError:
     RateLimitMetrics = None  # type: ignore[misc, assignment]
     init_metrics = None  # type: ignore[assignment]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "Arjun"
 __email__ = "arjun@example.com"
 

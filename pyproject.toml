@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "fastlimit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Production-ready rate limiting library for Python with Redis backend"
 authors = ["Arjun <arjun@example.com>"]
 readme = "README.md"
@@ -117,7 +117,7 @@ exclude_lines = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.1.0"
+version = "0.2.0"
 tag_format = "v$version"
 version_files = [
     "fastlimit/__init__.py:__version__",

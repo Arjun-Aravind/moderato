@@ -8,6 +8,7 @@ from datetime import datetime
 import pytest
 
 from fastlimit import RateLimiter, RateLimitExceeded
+from tests.conftest import sleep_past_window_boundary
 
 
 class TestFixedWindow:
@@ -39,7 +40,9 @@ class TestFixedWindow:
         """Test handling of burst requests."""
         limiter = clean_limiter
         key = f"burst-test-{datetime.utcnow().isoformat()}"
-        rate = "50/second"
+        # Hour window: a 1-second window can expire mid-burst on slow CI
+        # runners and over-allow; an hour cannot.
+        rate = "50/hour"
 
         # Send 100 requests concurrently
         tasks = []
@@ -61,6 +64,10 @@ class TestFixedWindow:
         limiter = clean_limiter
         key = f"window-test-{datetime.utcnow().isoformat()}"
         rate = "3/second"
+
+        # Start just after a window boundary so the fill below cannot
+        # straddle into a second window on slow runners
+        await sleep_past_window_boundary(limiter)
 
         # Use up the limit
         for _ in range(3):
@@ -129,7 +136,7 @@ class TestFixedWindow:
         """Test race conditions with concurrent requests to same key."""
         limiter = clean_limiter
         key = "concurrent-test"
-        rate = "10/second"
+        rate = "10/hour"
 
         # Send 20 concurrent requests
         tasks = []
@@ -278,13 +285,16 @@ class TestFixedWindow:
             result = await limiter.check(key=base_key, rate=rate)
             assert result is True
 
-        # Use up one limit
-        for _ in range(4):  # Total of 5 with the one above
-            await limiter.check(key=base_key, rate="5/second")
+        # Exhaust the second-based limit on its own key, aligned to a fresh
+        # window boundary so the fill cannot straddle on slow runners
+        await sleep_past_window_boundary(limiter)
+        second_key = f"{base_key}-second"
+        for _ in range(5):
+            assert await limiter.check(key=second_key, rate="5/second") is True
 
         # Second-based should be exhausted
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=base_key, rate="5/second")
+            await limiter.check(key=second_key, rate="5/second")
 
         # But minute-based should still work
         result = await limiter.check(key=base_key, rate="10/minute")

@@ -319,3 +319,16 @@ def redis_time_mock():
             self.current_us = microseconds
 
     return RedisTimeMock()
+
+
+async def sleep_past_window_boundary(limiter, buffer: float = 0.05) -> None:
+    """Sleep until just after the next 1-second window boundary.
+
+    Slow CI runners can otherwise land sequential requests in two different
+    windows, breaking exact-fill assertions. Redis TIME is used so the
+    alignment matches the limiter's own clock.
+    """
+    import asyncio
+
+    _, microseconds = await limiter.backend.get_redis_time()
+    await asyncio.sleep(1.0 - (microseconds / 1_000_000) + buffer)

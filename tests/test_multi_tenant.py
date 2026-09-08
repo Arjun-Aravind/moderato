@@ -54,8 +54,6 @@ class TestMultiTenant:
 
         # Test each tier
         for tier, limit in tier_limits.items():
-            # Extract expected count from limit
-
             # Make requests up to 10 (free tier limit)
             for _ in range(10):
                 result = await limiter.check(key=tenant_id, rate=limit, tenant_type=tier)
@@ -139,7 +137,7 @@ class TestMultiTenant:
             results = []
             for _ in range(count):
                 try:
-                    await limiter.check(key=tenant_id, rate="50/second", tenant_type=tenant_type)
+                    await limiter.check(key=tenant_id, rate="50/minute", tenant_type=tenant_type)
                     results.append(True)
                 except RateLimitExceeded:
                     results.append(False)

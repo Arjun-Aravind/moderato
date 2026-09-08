@@ -288,7 +288,9 @@ return {allowed, remaining, ttl * 1000}
         Args:
             key: Rate limit key (should be pre-formatted)
             max_tokens: Maximum bucket capacity (with 1000x multiplier)
-            refill_rate_per_second: Tokens added per second (integer, with 1000x multiplier)
+            refill_rate_per_second: Tokens added per second (float, with 1000x
+                multiplier, e.g. 0.278 for a 1/hour limit). Must not be rounded
+                to an integer or low rates truncate to zero refill.
             window_seconds: Window duration in seconds (for TTL calculation)
             current_time_ms: Current Unix timestamp in milliseconds
             cost: Tokens to consume (with 1000x multiplier, default 1000)
@@ -311,7 +313,7 @@ return {allowed, remaining, ttl * 1000}
                         1,  # number of keys
                         key.encode(),  # KEYS[1]
                         str(max_tokens).encode(),  # ARGV[1]
-                        str(refill_rate_per_second).encode(),  # ARGV[2] - integer tokens/sec
+                        str(refill_rate_per_second).encode(),  # ARGV[2] - float tokens/sec
                         str(window_seconds).encode(),  # ARGV[3] - for TTL
                         str(current_time_ms).encode(),  # ARGV[4] - millisecond timestamp
                         str(cost).encode(),  # ARGV[5]
@@ -567,6 +569,32 @@ return {allowed, remaining, ttl * 1000}
         except RedisError as e:
             logger.error(f"Failed to delete {len(keys)} keys: {e}")
             raise BackendError(f"Failed to reset rate limits: {e}") from e
+
+    async def scan_keys(self, pattern: str, count: int = 100) -> list[str]:
+        """
+        Scan for keys matching a glob pattern.
+
+        Args:
+            pattern: Redis glob pattern (e.g. "ratelimit:user123:*")
+            count: SCAN hint per iteration
+
+        Returns:
+            List of matching key names
+
+        Raises:
+            BackendError: If Redis operation fails
+        """
+        if not self._redis or not self._connected:
+            raise BackendError("Redis not connected")
+
+        try:
+            keys: list[str] = []
+            async for match in self._redis.scan_iter(match=pattern, count=count):
+                keys.append(match.decode() if isinstance(match, bytes) else match)
+            return keys
+        except RedisError as e:
+            logger.error(f"Failed to scan keys with pattern {pattern}: {e}")
+            raise BackendError(f"Failed to scan keys: {e}") from e
 
     async def get_usage(self, key: str) -> dict[str, Any]:
         """

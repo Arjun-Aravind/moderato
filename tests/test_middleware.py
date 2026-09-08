@@ -190,6 +190,10 @@ class TestRateLimitHeadersMiddleware:
         # All should have rate limit headers
         assert all("X-RateLimit-Remaining" in r.headers for r in responses)
 
+        # ASGITransport never runs lifespan events, so close the limiter
+        # explicitly to release its Redis connection on this loop.
+        await app_with_middleware.state.limiter.close()
+
     def test_headers_with_different_ips(self, app_with_middleware):
         """Test that different IPs get separate rate limits."""
         # Note: TestClient doesn't easily support different IPs,

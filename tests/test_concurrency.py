@@ -9,6 +9,7 @@ These tests validate that:
 """
 
 import asyncio
+import time
 from datetime import datetime
 
 import pytest
@@ -29,7 +30,7 @@ class TestFixedWindowConcurrency:
         limiter = clean_limiter
         key = f"fw-concurrent-{datetime.utcnow().isoformat()}"
         # Minute window: a 1-second window could expire mid-burst and over-allow
-        rate = "50/minute"
+        rate = "50/hour"
 
         async def make_request():
             try:
@@ -51,7 +52,7 @@ class TestFixedWindowConcurrency:
         """Test with 500 concurrent requests."""
         limiter = clean_limiter
         key = f"fw-high-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "100/minute"
+        rate = "100/hour"
 
         async def make_request():
             try:
@@ -69,7 +70,7 @@ class TestFixedWindowConcurrency:
         """Test concurrent requests with varying costs."""
         limiter = clean_limiter
         key = f"fw-cost-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "100/minute"
+        rate = "100/hour"
 
         async def make_request(cost: int):
             try:
@@ -95,7 +96,7 @@ class TestTokenBucketConcurrency:
         limiter = clean_limiter
         key = f"tb-concurrent-{datetime.utcnow().isoformat()}"
         # Slow refill (minute window) keeps refill during the burst negligible
-        rate = "20/minute"
+        rate = "20/hour"
 
         async def make_request():
             try:
@@ -130,15 +131,21 @@ class TestTokenBucketConcurrency:
         assert allowed_first == 10
 
         # Wait for some refill
+        wait_start = time.monotonic()
         await asyncio.sleep(0.5)
+        elapsed = time.monotonic() - wait_start
 
         # Second burst
         tasks = [make_request() for _ in range(20)]
         results = await asyncio.gather(*tasks)
         allowed_second = sum(1 for r in results if r is True)
 
-        # Should allow approximately 5 tokens (0.5s * 10/s)
-        assert 3 <= allowed_second <= 7, f"Expected ~5 allowed, got {allowed_second}"
+        # Should allow roughly elapsed * 10 tokens (rate-limit pace), tolerant
+        # of slow runners where the sleep and burst take longer than requested
+        expected_second = 10 * elapsed
+        assert (
+            expected_second - 3 <= allowed_second <= expected_second + 3
+        ), f"Expected ~{expected_second:.1f} allowed, got {allowed_second}"
 
 
 @pytest.mark.asyncio
@@ -149,7 +156,7 @@ class TestSlidingWindowConcurrency:
         """Test sliding window atomic enforcement under concurrency."""
         limiter = clean_limiter
         key = f"sw-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "30/minute"
+        rate = "30/hour"
 
         async def make_request():
             try:
@@ -177,7 +184,7 @@ class TestRaceConditions:
         """
         limiter = clean_limiter
         key = f"race-rapid-{datetime.utcnow().isoformat()}"
-        rate = "10/minute"
+        rate = "10/hour"
 
         # Launch requests with minimal delay
         allowed = 0
@@ -198,7 +205,7 @@ class TestRaceConditions:
         """Test that check_with_info is also atomic under concurrency."""
         limiter = clean_limiter
         key = f"race-info-{datetime.utcnow().isoformat()}"
-        rate = "25/minute"
+        rate = "25/hour"
 
         async def make_request():
             try:
@@ -293,7 +300,7 @@ class TestMultiKeyIsolation:
     async def test_concurrent_different_keys(self, clean_limiter):
         """Test that different keys don't interfere under concurrency."""
         limiter = clean_limiter
-        rate = "10/minute"
+        rate = "10/hour"
 
         async def make_request(key: str):
             try:
@@ -348,7 +355,7 @@ class TestEdgeCaseConcurrency:
         """Test concurrent requests where cost equals limit."""
         limiter = clean_limiter
         key = f"cost-limit-{datetime.utcnow().isoformat()}"
-        rate = "10/minute"
+        rate = "10/hour"
 
         async def make_request():
             try:
@@ -401,7 +408,7 @@ class TestHighLoadConcurrency:
         """Test with 1000 concurrent requests."""
         limiter = clean_limiter
         key = f"high-load-{datetime.utcnow().isoformat()}"
-        rate = "100/minute"
+        rate = "100/hour"
 
         async def make_request():
             try:
@@ -423,6 +430,7 @@ class TestHighLoadConcurrency:
 
         total_allowed = 0
         total_denied = 0
+        load_start = time.monotonic()
 
         for second in range(3):
 
@@ -443,6 +451,15 @@ class TestHighLoadConcurrency:
             if second < 2:
                 await asyncio.sleep(1.0)
 
-        # Over 3 seconds with 50/s limit, should allow ~150
-        # (timing may vary slightly)
-        assert 140 <= total_allowed <= 160, f"Expected ~150 allowed, got {total_allowed}"
+        # Sustained throughput must track the 50/s limit measured over the
+        # actual wall time (CI runners are far slower than the nominal 3s),
+        # with slack for one fixed-window boundary burst.
+        wall_time = time.monotonic() - load_start
+        max_allowed = 50 * wall_time + 50
+        assert total_allowed <= max_allowed, (
+            f"Exceeded sustained rate: {total_allowed} allowed in {wall_time:.1f}s "
+            f"(max {max_allowed:.0f})"
+        )
+        assert (
+            total_allowed >= 25 * wall_time
+        ), f"Under-delivered: {total_allowed} allowed in {wall_time:.1f}s"

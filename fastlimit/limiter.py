@@ -15,6 +15,36 @@ from .utils import _url_encode_key_component, generate_key, get_time_window, par
 logger = logging.getLogger(__name__)
 
 
+def _escape_glob(value: str) -> str:
+    """Escape Redis glob metacharacters so a MATCH pattern matches literally."""
+    for ch in ("\\", "*", "?", "["):
+        value = value.replace(ch, f"\\{ch}")
+    return value
+
+
+def _key_matches_algorithm(full_key: str, algorithm: str) -> bool:
+    """Classify a rate limit key by its suffix structure.
+
+    Key shapes (after prefix:id:tenant):
+    - token bucket: ...:bucket
+    - sliding window: ...:sliding:{window_start}
+    - fixed window: ...:{window_start}
+    """
+    # Parse from the right: key_prefix may itself contain colons.
+    parts = full_key.split(":")
+    if len(parts) < 2:
+        return False
+    last = parts[-1]
+    second_last = parts[-2]
+    if algorithm == "token_bucket":
+        return last == "bucket"
+    if algorithm == "sliding_window":
+        return second_last == "sliding" and last.isdigit()
+    if algorithm == "fixed_window":
+        return last.isdigit() and second_last != "sliding"
+    return True
+
+
 class RateLimiter:
     """
     Main rate limiter class with async support.
@@ -415,7 +445,7 @@ class RateLimiter:
         # No tenant_type means reset every tenant type for this key.
         # A single SCAN + delete covers all algorithms and windows at once.
         if tenant_type is None:
-            return await self._reset_all_tenants(key)
+            return await self._reset_all_tenants(key, algorithm)
 
         tenant_type = tenant_type or "default"
         algorithm = algorithm or self.config.default_algorithm
@@ -441,31 +471,40 @@ class RateLimiter:
 
         return reset_success
 
-    async def _reset_all_tenants(self, key: str) -> bool:
+    async def _reset_all_tenants(self, key: str, algorithm: Optional[str] = None) -> bool:
         """Reset rate limit keys for every tenant type of this key.
 
         Scans for keys shaped ``{prefix}:{encoded_key}:*`` which covers all
-        tenant types, algorithms, and time windows in one pass. Note: keys
-        longer than 200 chars are SHA-hashed (see utils.hash_key) and cannot
-        be matched by this scan; use reset(..., tenant_type=...) with the
-        exact tenant for those.
+        tenant types, algorithms, and time windows in one pass. If an
+        ``algorithm`` is given, only keys for that algorithm are deleted.
+        Note: keys longer than 200 chars are SHA-hashed (see utils.hash_key)
+        and cannot be matched by this scan; use reset(..., tenant_type=...)
+        with the exact tenant for those.
         """
         if not self._connected:
             await self.connect()
 
-        encoded_key = _url_encode_key_component(key)
-        pattern = f"{self.config.key_prefix}:{encoded_key}:*"
+        if algorithm is not None and algorithm not in (
+            "all",
+            "fixed_window",
+            "token_bucket",
+            "sliding_window",
+        ):
+            raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
+
+        # URL-encoding already strips Redis glob metacharacters from the key,
+        # but the configured prefix is user input - escape it for MATCH.
+        pattern = f"{_escape_glob(self.config.key_prefix)}:{_url_encode_key_component(key)}:*"
+
+        all_keys = await self.backend.scan_keys(pattern)
+        if algorithm is not None and algorithm != "all":
+            selected = algorithm
+            all_keys = [k for k in all_keys if _key_matches_algorithm(k, selected)]
 
         deleted_any = False
-        batch: list[str] = []
-        async for match in self.backend._redis.scan_iter(match=pattern, count=100):  # type: ignore[union-attr]
-            batch.append(match.decode() if isinstance(match, bytes) else match)
-            if len(batch) >= 100:
-                if await self.backend.delete_many(batch):
-                    deleted_any = True
-                batch = []
-        if batch and await self.backend.delete_many(batch):
-            deleted_any = True
+        for i in range(0, len(all_keys), 100):
+            if await self.backend.delete_many(all_keys[i : i + 100]):
+                deleted_any = True
         return deleted_any
 
     async def _reset_fixed_window(self, key: str, tenant_type: str, current_time: int) -> bool:
@@ -644,8 +683,8 @@ class RateLimiter:
             # Bucket not yet created, would start full
             current_tokens = max_tokens
 
-        # Convert from integer math
-        tokens_display = current_tokens // 1000
+        # Convert from integer math (float refill rate can leak floats here)
+        tokens_display = int(current_tokens // 1000)
         remaining = tokens_display  # Tokens are what's remaining
 
         # Estimate TTL (bucket keys use 2*window + 60s expiry)

@@ -2,10 +2,10 @@
 Tests for Fixed Window rate limiting algorithm.
 """
 
-import pytest
 import asyncio
 from datetime import datetime
-import time
+
+import pytest
 
 from fastlimit import RateLimiter, RateLimitExceeded
 
@@ -84,36 +84,20 @@ class TestFixedWindow:
 
         # Tenant A uses their limit
         for _ in range(5):
-            await limiter.check(
-                key="tenant-a",
-                rate="5/minute",
-                tenant_type="premium"
-            )
+            await limiter.check(key="tenant-a", rate="5/minute", tenant_type="premium")
 
         # Tenant A should be limited
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(
-                key="tenant-a",
-                rate="5/minute",
-                tenant_type="premium"
-            )
+            await limiter.check(key="tenant-a", rate="5/minute", tenant_type="premium")
 
         # But Tenant B should still work
         for _ in range(5):
-            result = await limiter.check(
-                key="tenant-b",
-                rate="5/minute",
-                tenant_type="free"
-            )
+            result = await limiter.check(key="tenant-b", rate="5/minute", tenant_type="free")
             assert result is True
 
         # And same tenant with different type should work
         for _ in range(5):
-            result = await limiter.check(
-                key="tenant-a",
-                rate="5/minute",
-                tenant_type="free"
-            )
+            result = await limiter.check(key="tenant-a", rate="5/minute", tenant_type="free")
             assert result is True
 
     @pytest.mark.asyncio
@@ -130,7 +114,7 @@ class TestFixedWindow:
 
         for rate_str, expected_requests, expected_window in test_cases:
             from fastlimit.utils import parse_rate
-            
+
             requests, window = parse_rate(rate_str)
             assert requests == expected_requests
             assert window == expected_window
@@ -287,12 +271,7 @@ class TestFixedWindow:
         base_key = "window"
 
         # These should all be independent
-        rates = [
-            "5/second",
-            "10/minute",
-            "100/hour",
-            "1000/day"
-        ]
+        rates = ["5/second", "10/minute", "100/hour", "1000/day"]
 
         for rate in rates:
             # Each rate should work independently

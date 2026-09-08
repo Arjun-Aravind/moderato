@@ -274,7 +274,7 @@ return {allowed, remaining, ttl * 1000}
         self,
         key: str,
         max_tokens: int,
-        refill_rate_per_second: int,
+        refill_rate_per_second: float,
         window_seconds: int,
         current_time_ms: int,
         cost: int = 1000,
@@ -358,7 +358,7 @@ return {allowed, remaining, ttl * 1000}
         self,
         key: str,
         max_tokens: int,
-        refill_rate_per_second: int,
+        refill_rate_per_second: float,
         window_seconds: int,
         current_time_ms: int,
         cost: int = 1000,
@@ -542,6 +542,31 @@ return {allowed, remaining, ttl * 1000}
         except RedisError as e:
             logger.error(f"Failed to reset key {key}: {e}")
             raise BackendError(f"Failed to reset rate limit: {e}") from e
+
+    async def delete_many(self, keys: list[str]) -> bool:
+        """
+        Delete multiple keys in one round trip.
+
+        Args:
+            keys: Rate limit keys to delete
+
+        Returns:
+            True if at least one key was deleted
+
+        Raises:
+            BackendError: If Redis operation fails
+        """
+        if not keys:
+            return False
+        if not self._redis or not self._connected:
+            raise BackendError("Redis not connected")
+
+        try:
+            result = await self._redis.delete(*keys)
+            return bool(result)
+        except RedisError as e:
+            logger.error(f"Failed to delete {len(keys)} keys: {e}")
+            raise BackendError(f"Failed to reset rate limits: {e}") from e
 
     async def get_usage(self, key: str) -> dict[str, Any]:
         """

@@ -94,7 +94,7 @@ pretty = true
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "-ra -q --strict-markers"
+addopts = "-ra -q --strict-markers --timeout=120"
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"

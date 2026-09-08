@@ -19,7 +19,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastlimit import RateLimiter  # noqa: E402
 
 # Configure logging for tests
-logging.basicConfig(level=logging.DEBUG)
+# WARNING (not DEBUG): debug logging of every Redis check slows high-concurrency
+# tests enough to straddle rate-limit windows and makes failures unreadable.
+logging.basicConfig(level=logging.WARNING)
 
 
 @pytest.fixture(scope="session")

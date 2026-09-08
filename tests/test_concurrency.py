@@ -28,7 +28,8 @@ class TestFixedWindowConcurrency:
         """
         limiter = clean_limiter
         key = f"fw-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "50/second"
+        # Minute window: a 1-second window could expire mid-burst and over-allow
+        rate = "50/minute"
 
         async def make_request():
             try:
@@ -50,7 +51,7 @@ class TestFixedWindowConcurrency:
         """Test with 500 concurrent requests."""
         limiter = clean_limiter
         key = f"fw-high-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "100/second"
+        rate = "100/minute"
 
         async def make_request():
             try:
@@ -68,7 +69,7 @@ class TestFixedWindowConcurrency:
         """Test concurrent requests with varying costs."""
         limiter = clean_limiter
         key = f"fw-cost-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "100/second"
+        rate = "100/minute"
 
         async def make_request(cost: int):
             try:
@@ -93,7 +94,8 @@ class TestTokenBucketConcurrency:
         """Test that token bucket enforces exact capacity under concurrency."""
         limiter = clean_limiter
         key = f"tb-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "20/second"
+        # Slow refill (minute window) keeps refill during the burst negligible
+        rate = "20/minute"
 
         async def make_request():
             try:
@@ -147,7 +149,7 @@ class TestSlidingWindowConcurrency:
         """Test sliding window atomic enforcement under concurrency."""
         limiter = clean_limiter
         key = f"sw-concurrent-{datetime.utcnow().isoformat()}"
-        rate = "30/second"
+        rate = "30/minute"
 
         async def make_request():
             try:
@@ -175,7 +177,7 @@ class TestRaceConditions:
         """
         limiter = clean_limiter
         key = f"race-rapid-{datetime.utcnow().isoformat()}"
-        rate = "10/second"
+        rate = "10/minute"
 
         # Launch requests with minimal delay
         allowed = 0
@@ -196,7 +198,7 @@ class TestRaceConditions:
         """Test that check_with_info is also atomic under concurrency."""
         limiter = clean_limiter
         key = f"race-info-{datetime.utcnow().isoformat()}"
-        rate = "25/second"
+        rate = "25/minute"
 
         async def make_request():
             try:
@@ -291,7 +293,7 @@ class TestMultiKeyIsolation:
     async def test_concurrent_different_keys(self, clean_limiter):
         """Test that different keys don't interfere under concurrency."""
         limiter = clean_limiter
-        rate = "10/second"
+        rate = "10/minute"
 
         async def make_request(key: str):
             try:
@@ -346,7 +348,7 @@ class TestEdgeCaseConcurrency:
         """Test concurrent requests where cost equals limit."""
         limiter = clean_limiter
         key = f"cost-limit-{datetime.utcnow().isoformat()}"
-        rate = "10/second"
+        rate = "10/minute"
 
         async def make_request():
             try:
@@ -399,7 +401,7 @@ class TestHighLoadConcurrency:
         """Test with 1000 concurrent requests."""
         limiter = clean_limiter
         key = f"high-load-{datetime.utcnow().isoformat()}"
-        rate = "100/second"
+        rate = "100/minute"
 
         async def make_request():
             try:

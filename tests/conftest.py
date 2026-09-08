@@ -332,18 +332,3 @@ async def sleep_past_window_boundary(limiter, buffer: float = 0.05) -> None:
 
     _, microseconds = await limiter.backend.get_redis_time()
     await asyncio.sleep(1.0 - (microseconds / 1_000_000) + buffer)
-
-
-async def drain_bucket_concurrently(limiter, key: str, rate: str, count: int, **kwargs) -> None:
-    """Consume `count` tokens at once so the bucket drains faster than it refills.
-
-    A sequential fill runs slower than the refill rate on slow CI runners,
-    letting the bucket top back up mid-fill and breaking the "next request
-    is denied" expectation. Firing all checks concurrently consumes the
-    capacity in one round trip, before any refill can accrue.
-    """
-    import asyncio
-
-    tasks = [limiter.check(key=key, rate=rate, **kwargs) for _ in range(count)]
-    results = await asyncio.gather(*tasks)
-    assert all(r is True for r in results), "bucket drain was denied mid-fill"

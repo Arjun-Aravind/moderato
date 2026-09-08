@@ -142,8 +142,9 @@ class TestTokenBucketConcurrency:
         allowed_second = sum(1 for r in results if r is True)
 
         # Should allow roughly elapsed * 10 tokens (rate-limit pace), tolerant
-        # of slow runners where the sleep and burst take longer than requested
-        expected_second = 10 * elapsed
+        # of slow runners where the sleep and burst take longer than requested,
+        # capped at the burst size (only 20 requests are fired)
+        expected_second = min(20, 10 * elapsed)
         assert (
             expected_second - 3 <= allowed_second <= expected_second + 3
         ), f"Expected ~{expected_second:.1f} allowed, got {allowed_second}"

@@ -285,18 +285,19 @@ class TestFixedWindow:
             result = await limiter.check(key=base_key, rate=rate)
             assert result is True
 
-        # Exhaust the second-based limit on its own key, aligned to a fresh
-        # window boundary so the fill cannot straddle on slow runners
+        # Exhaust the second-based limit, aligned to a fresh window boundary
+        # so the fill cannot straddle on slow runners. The earlier loop's
+        # 5/second check lives in the previous window, so base_key starts
+        # at 0 here and the same-key cross-window independence is preserved.
         await sleep_past_window_boundary(limiter)
-        second_key = f"{base_key}-second"
         for _ in range(5):
-            assert await limiter.check(key=second_key, rate="5/second") is True
+            assert await limiter.check(key=base_key, rate="5/second") is True
 
         # Second-based should be exhausted
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=second_key, rate="5/second")
+            await limiter.check(key=base_key, rate="5/second")
 
-        # But minute-based should still work
+        # But minute-based should still work (different window, same key)
         result = await limiter.check(key=base_key, rate="10/minute")
         assert result is True
 

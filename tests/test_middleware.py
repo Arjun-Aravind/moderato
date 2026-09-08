@@ -177,22 +177,24 @@ class TestRateLimitHeadersMiddleware:
         # loop, and the shared Redis client / asyncio.Lock are loop-bound,
         # which deadlocks the process at exit.
         transport = httpx.ASGITransport(app=app_with_middleware)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
 
-            async def make_request():
-                return await client.get("/limited")
+                async def make_request():
+                    return await client.get("/limited")
 
-            responses = await asyncio.gather(*[make_request() for _ in range(5)])
+                responses = await asyncio.gather(*[make_request() for _ in range(5)])
 
-        # All should succeed (within limit)
-        assert all(r.status_code == 200 for r in responses)
+            # All should succeed (within limit)
+            assert all(r.status_code == 200 for r in responses)
 
-        # All should have rate limit headers
-        assert all("X-RateLimit-Remaining" in r.headers for r in responses)
-
-        # ASGITransport never runs lifespan events, so close the limiter
-        # explicitly to release its Redis connection on this loop.
-        await app_with_middleware.state.limiter.close()
+            # All should have rate limit headers
+            assert all("X-RateLimit-Remaining" in r.headers for r in responses)
+        finally:
+            # ASGITransport never runs lifespan events, so close the limiter
+            # explicitly to release its Redis connection on this loop - even
+            # when an assertion above fails.
+            await app_with_middleware.state.limiter.close()
 
     def test_headers_with_different_ips(self, app_with_middleware):
         """Test that different IPs get separate rate limits."""

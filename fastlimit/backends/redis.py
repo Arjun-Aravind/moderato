@@ -3,6 +3,7 @@ Redis backend implementation for rate limiting.
 """
 
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
@@ -570,16 +571,16 @@ return {allowed, remaining, ttl * 1000}
             logger.error(f"Failed to delete {len(keys)} keys: {e}")
             raise BackendError(f"Failed to reset rate limits: {e}") from e
 
-    async def scan_keys(self, pattern: str, count: int = 100) -> list[str]:
+    async def iter_keys(self, pattern: str, count: int = 100) -> AsyncIterator[str]:
         """
-        Scan for keys matching a glob pattern.
+        Yield keys matching a glob pattern incrementally.
+
+        Streaming keeps peak memory bounded for large key sets; callers
+        should batch deletions while iterating.
 
         Args:
             pattern: Redis glob pattern (e.g. "ratelimit:user123:*")
             count: SCAN hint per iteration
-
-        Returns:
-            List of matching key names
 
         Raises:
             BackendError: If Redis operation fails
@@ -588,10 +589,8 @@ return {allowed, remaining, ttl * 1000}
             raise BackendError("Redis not connected")
 
         try:
-            keys: list[str] = []
             async for match in self._redis.scan_iter(match=pattern, count=count):
-                keys.append(match.decode() if isinstance(match, bytes) else match)
-            return keys
+                yield match.decode() if isinstance(match, bytes) else match
         except RedisError as e:
             logger.error(f"Failed to scan keys with pattern {pattern}: {e}")
             raise BackendError(f"Failed to scan keys: {e}") from e

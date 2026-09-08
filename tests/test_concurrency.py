@@ -133,11 +133,12 @@ class TestTokenBucketConcurrency:
         # Wait for some refill
         wait_start = time.monotonic()
         await asyncio.sleep(0.5)
-        elapsed = time.monotonic() - wait_start
 
-        # Second burst
+        # Second burst - measured together with the sleep, because tokens
+        # keep accruing at 10/s while the burst itself is in flight
         tasks = [make_request() for _ in range(20)]
         results = await asyncio.gather(*tasks)
+        elapsed = time.monotonic() - wait_start
         allowed_second = sum(1 for r in results if r is True)
 
         # Should allow roughly elapsed * 10 tokens (rate-limit pace), tolerant

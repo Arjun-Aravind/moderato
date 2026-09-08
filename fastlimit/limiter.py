@@ -22,26 +22,26 @@ def _escape_glob(value: str) -> str:
     return value
 
 
-def _key_matches_algorithm(full_key: str, algorithm: str) -> bool:
-    """Classify a rate limit key by its suffix structure.
+def _suffix_matches_algorithm(suffix: str, algorithm: str) -> bool:
+    """Classify a rate limit key by the suffix after ``prefix:key:tenant``.
 
-    Key shapes (after prefix:id:tenant):
-    - token bucket: ...:bucket
-    - sliding window: ...:sliding:{window_start}
-    - fixed window: ...:{window_start}
+    Parsing only the suffix keeps tenant names (even one literally called
+    "sliding" or ending in "bucket") from affecting classification.
+    Shapes:
+    - token bucket: "bucket"
+    - sliding window: "sliding:{window_start}"
+    - fixed window: "{window_start}"
     """
-    # Parse from the right: key_prefix may itself contain colons.
-    parts = full_key.split(":")
+    parts = suffix.split(":")
     if len(parts) < 2:
         return False
-    last = parts[-1]
-    second_last = parts[-2]
+    rest = parts[1:]  # drop the tenant component
     if algorithm == "token_bucket":
-        return last == "bucket"
+        return rest == ["bucket"]
     if algorithm == "sliding_window":
-        return second_last == "sliding" and last.isdigit()
+        return len(rest) == 2 and rest[0] == "sliding" and rest[1].isdigit()
     if algorithm == "fixed_window":
-        return last.isdigit() and second_last != "sliding"
+        return len(rest) == 1 and rest[0].isdigit()
     return True
 
 
@@ -494,17 +494,28 @@ class RateLimiter:
 
         # URL-encoding already strips Redis glob metacharacters from the key,
         # but the configured prefix is user input - escape it for MATCH.
-        pattern = f"{_escape_glob(self.config.key_prefix)}:{_url_encode_key_component(key)}:*"
+        encoded_key = _url_encode_key_component(key)
+        pattern = f"{_escape_glob(self.config.key_prefix)}:{encoded_key}:*"
+        # Everything after "{prefix}:{encoded_key}:" is "{tenant}:{suffix}"
+        # (+1 skips the separator colon before the tenant)
+        suffix_offset = len(self.config.key_prefix) + 1 + len(encoded_key) + 1
 
-        all_keys = await self.backend.scan_keys(pattern)
-        if algorithm is not None and algorithm != "all":
-            selected = algorithm
-            all_keys = [k for k in all_keys if _key_matches_algorithm(k, selected)]
-
+        # Stream keys and delete in batches so peak memory stays bounded
+        check_algorithm = algorithm if algorithm not in (None, "all") else None
         deleted_any = False
-        for i in range(0, len(all_keys), 100):
-            if await self.backend.delete_many(all_keys[i : i + 100]):
-                deleted_any = True
+        batch: list[str] = []
+        async for full_key in self.backend.iter_keys(pattern):
+            if check_algorithm is not None and not _suffix_matches_algorithm(
+                full_key[suffix_offset:], check_algorithm
+            ):
+                continue
+            batch.append(full_key)
+            if len(batch) >= 100:
+                if await self.backend.delete_many(batch):
+                    deleted_any = True
+                batch = []
+        if batch and await self.backend.delete_many(batch):
+            deleted_any = True
         return deleted_any
 
     async def _reset_fixed_window(self, key: str, tenant_type: str, current_time: int) -> bool:

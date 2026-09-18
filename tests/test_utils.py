@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from fastlimit.utils import (
+from moderato.utils import (
     _url_encode_key_component,
     calculate_cost,
     generate_key,

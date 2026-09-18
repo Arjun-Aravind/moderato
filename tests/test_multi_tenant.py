@@ -7,7 +7,7 @@ from datetime import datetime
 
 import pytest
 
-from fastlimit import RateLimitExceeded
+from moderato import RateLimitExceeded
 
 
 class TestMultiTenant:

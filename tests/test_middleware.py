@@ -9,7 +9,7 @@ import redis as sync_redis
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from fastlimit import RateLimiter, RateLimitHeadersMiddleware
+from moderato import RateLimiter, RateLimitHeadersMiddleware
 
 
 @pytest.fixture
@@ -283,7 +283,7 @@ class TestRateLimitMiddleware:
     def app_with_rate_limit_middleware(self, redis_url):
         import uuid
 
-        from fastlimit.decorators import RateLimitMiddleware
+        from moderato.decorators import RateLimitMiddleware
 
         app = FastAPI()
         limiter = RateLimiter(
@@ -326,7 +326,7 @@ class TestRateLimitMiddleware:
 
         import httpx
 
-        from fastlimit.exceptions import RateLimitExceeded
+        from moderato.exceptions import RateLimitExceeded
 
         app = FastAPI()
         app.add_middleware(RateLimitHeadersMiddleware)

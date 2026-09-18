@@ -1,5 +1,5 @@
 """
-Exception classes for FastLimit rate limiting library.
+Exception classes for Moderato rate limiting library.
 """
 
 from typing import Optional

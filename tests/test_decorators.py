@@ -5,7 +5,7 @@ Tests for rate limiting decorators.
 
 import pytest
 
-from fastlimit import RateLimitExceeded
+from moderato import RateLimitExceeded
 
 
 class TestDecorators:

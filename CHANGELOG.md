@@ -5,11 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING:** Renamed the package from `fastlimit` to `moderato` (`pip install moderato`, `import moderato`). The name `fastlimit` was already taken on PyPI by an unrelated package. In musical notation, moderato means "at a moderate pace" — the library enforces your API's tempo.
+- Corrected package author metadata to `Arjun Aravind <arjunaravind748@gmail.com>`.
+
 ## [0.1.0] - 2025-01-18
 
 ### Added
 
-- Initial release of fastlimit
+- Initial release of moderato
 - Core rate limiting with Redis backend
 - Token bucket and sliding window algorithms
 - FastAPI integration with `@limiter.limit()` decorator

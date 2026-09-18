@@ -1,5 +1,5 @@
 """
-Example FastAPI application demonstrating FastLimit rate limiting.
+Example FastAPI application demonstrating Moderato rate limiting.
 
 Run with:
     uvicorn examples.fastapi_app:app --reload --port 8000
@@ -17,11 +17,11 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 
 app = FastAPI(
-    title="FastLimit Demo API",
-    description="Demonstration of rate limiting with FastLimit",
+    title="Moderato Demo API",
+    description="Demonstration of rate limiting with Moderato",
     version="1.0.0",
 )
 
@@ -74,7 +74,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 async def root():
     """Root endpoint - not rate limited."""
     return {
-        "message": "Welcome to FastLimit Demo API",
+        "message": "Welcome to Moderato Demo API",
         "docs": "/docs",
         "endpoints": [
             "/api/public",

@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "fastlimit"
+name = "moderato"
 version = "0.2.0"
 description = "Production-ready rate limiting library for Python with Redis backend"
-authors = ["Arjun <arjun@example.com>"]
+authors = ["Arjun Aravind <arjunaravind748@gmail.com>"]
 readme = "README.md"
-packages = [{include = "fastlimit"}]
+packages = [{include = "moderato"}]
 keywords = ["rate-limit", "rate-limiting", "redis", "fastapi", "async", "api", "throttle"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -20,9 +20,9 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-homepage = "https://github.com/Arjun-Aravind/fastlimit"
-repository = "https://github.com/Arjun-Aravind/fastlimit"
-documentation = "https://github.com/Arjun-Aravind/fastlimit#readme"
+homepage = "https://github.com/Arjun-Aravind/moderato"
+repository = "https://github.com/Arjun-Aravind/moderato"
+documentation = "https://github.com/Arjun-Aravind/moderato#readme"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -103,7 +103,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["fastlimit"]
+source = ["moderato"]
 omit = ["*/tests/*", "*/examples/*", "*/benchmarks/*"]
 
 [tool.coverage.report]
@@ -120,7 +120,7 @@ name = "cz_conventional_commits"
 version = "0.2.0"
 tag_format = "v$version"
 version_files = [
-    "fastlimit/__init__.py:__version__",
+    "moderato/__init__.py:__version__",
     "pyproject.toml:^version"
 ]
 update_changelog_on_bump = true

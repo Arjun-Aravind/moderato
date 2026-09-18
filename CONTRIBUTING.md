@@ -1,6 +1,6 @@
-# Contributing to FastLimit
+# Contributing to Moderato
 
-Thank you for your interest in contributing to FastLimit! This document provides guidelines and instructions for contributing to the project.
+Thank you for your interest in contributing to Moderato! This document provides guidelines and instructions for contributing to the project.
 
 ---
 
@@ -81,11 +81,11 @@ If this is your first contribution:
 
 ```bash
 # Fork the repository on GitHub, then clone your fork
-git clone https://github.com/YOUR_USERNAME/fastlimit.git
-cd fastlimit
+git clone https://github.com/YOUR_USERNAME/moderato.git
+cd moderato
 
 # Add upstream remote
-git remote add upstream https://github.com/Arjun-Aravind/fastlimit.git
+git remote add upstream https://github.com/Arjun-Aravind/moderato.git
 ```
 
 ### 2. Create Virtual Environment
@@ -108,7 +108,7 @@ venv\Scripts\activate
 pip install -e ".[dev,test,metrics]"
 
 # This installs:
-# - fastlimit package in editable mode
+# - moderato package in editable mode
 # - Development tools (black, ruff, mypy)
 # - Testing tools (pytest, pytest-asyncio, pytest-cov)
 # - Optional dependencies (prometheus-client)
@@ -149,8 +149,8 @@ pytest
 ## Project Structure
 
 ```
-fastlimit/
-├── fastlimit/                  # Main package
+moderato/
+├── moderato/                  # Main package
 │   ├── __init__.py            # Public API exports
 │   ├── limiter.py             # RateLimiter class (main interface)
 │   ├── models.py              # Data models (RateLimitConfig, etc.)
@@ -235,7 +235,7 @@ git checkout -b fix/issue-123
 pytest
 
 # Run with coverage
-pytest --cov=fastlimit --cov-report=html
+pytest --cov=moderato --cov-report=html
 
 # Run specific test file
 pytest tests/test_limiter.py
@@ -248,13 +248,13 @@ pytest tests/test_limiter.py::test_basic_rate_limiting
 
 ```bash
 # Format code with black
-black fastlimit/ tests/
+black moderato/ tests/
 
 # Lint with ruff
-ruff check fastlimit/ tests/
+ruff check moderato/ tests/
 
 # Type check with mypy
-mypy fastlimit/ --strict
+mypy moderato/ --strict
 ```
 
 ### 5. Commit Changes
@@ -392,7 +392,7 @@ async def clean_redis(limiter):
 
 Check coverage:
 ```bash
-pytest --cov=fastlimit --cov-report=term-missing
+pytest --cov=moderato --cov-report=term-missing
 ```
 
 ---
@@ -412,17 +412,17 @@ We follow **PEP 8** with some modifications:
 
 **Black** (automatic formatting):
 ```bash
-black fastlimit/ tests/
+black moderato/ tests/
 ```
 
 **Ruff** (linting):
 ```bash
-ruff check fastlimit/ tests/ --fix
+ruff check moderato/ tests/ --fix
 ```
 
 **Mypy** (type checking):
 ```bash
-mypy fastlimit/ --strict
+mypy moderato/ --strict
 ```
 
 ### Code Conventions
@@ -840,20 +840,20 @@ pip install -e .
 pip install -e ".[dev,test,metrics]"
 
 # Run tests with coverage
-pytest --cov=fastlimit --cov-report=html
+pytest --cov=moderato --cov-report=html
 
 # Open coverage report
 open htmlcov/index.html  # Mac
 xdg-open htmlcov/index.html  # Linux
 
 # Format all code
-black fastlimit/ tests/ examples/
+black moderato/ tests/ examples/
 
 # Lint and auto-fix
-ruff check fastlimit/ tests/ --fix
+ruff check moderato/ tests/ --fix
 
 # Type check
-mypy fastlimit/ --strict
+mypy moderato/ --strict
 
 # Build package
 python -m build
@@ -892,12 +892,12 @@ When asking questions:
 
 ## License
 
-By contributing to FastLimit, you agree that your contributions will be licensed under the MIT License.
+By contributing to Moderato, you agree that your contributions will be licensed under the MIT License.
 
 ---
 
 ## Thank You! 
 
-Thank you for contributing to FastLimit! Your contributions help make rate limiting better for everyone.
+Thank you for contributing to Moderato! Your contributions help make rate limiting better for everyone.
 
 **Happy Coding!** 

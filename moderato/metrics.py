@@ -41,8 +41,8 @@ class RateLimitMetrics:
     Metrics follow Prometheus naming conventions and best practices.
 
     Usage:
-        from fastlimit import RateLimiter
-        from fastlimit.metrics import RateLimitMetrics
+        from moderato import RateLimiter
+        from moderato.metrics import RateLimitMetrics
 
         limiter = RateLimiter(
             redis_url="redis://localhost:6379",
@@ -65,7 +65,7 @@ class RateLimitMetrics:
             )
     """
 
-    def __init__(self, namespace: str = "fastlimit", enabled: bool = True):
+    def __init__(self, namespace: str = "moderato", enabled: bool = True):
         """
         Initialize metrics collector.
 
@@ -385,7 +385,7 @@ def get_metrics() -> Optional[RateLimitMetrics]:
     return _global_metrics
 
 
-def init_metrics(namespace: str = "fastlimit", enabled: bool = True) -> RateLimitMetrics:
+def init_metrics(namespace: str = "moderato", enabled: bool = True) -> RateLimitMetrics:
     """
     Initialize the global metrics collector.
 

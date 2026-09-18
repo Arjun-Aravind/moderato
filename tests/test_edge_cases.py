@@ -1,5 +1,5 @@
 """
-Edge case and error handling tests for FastLimit.
+Edge case and error handling tests for Moderato.
 
 These tests validate:
 - Input validation and error messages
@@ -14,9 +14,9 @@ from datetime import datetime
 
 import pytest
 
-from fastlimit import RateLimiter, RateLimitExceeded
-from fastlimit.exceptions import RateLimitConfigError
-from fastlimit.models import CheckResult
+from moderato import RateLimiter, RateLimitExceeded
+from moderato.exceptions import RateLimitConfigError
+from moderato.models import CheckResult
 
 
 @pytest.mark.asyncio

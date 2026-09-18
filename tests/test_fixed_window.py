@@ -7,7 +7,7 @@ from datetime import datetime
 
 import pytest
 
-from fastlimit import RateLimiter, RateLimitExceeded
+from moderato import RateLimiter, RateLimitExceeded
 from tests.conftest import sleep_past_window_boundary
 
 
@@ -120,7 +120,7 @@ class TestFixedWindow:
         ]
 
         for rate_str, expected_requests, expected_window in test_cases:
-            from fastlimit.utils import parse_rate
+            from moderato.utils import parse_rate
 
             requests, window = parse_rate(rate_str)
             assert requests == expected_requests

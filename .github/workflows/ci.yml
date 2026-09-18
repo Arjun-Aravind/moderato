@@ -77,7 +77,7 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Run tests
-        run: poetry run pytest --cov=fastlimit --cov-report=xml -v
+        run: poetry run pytest --cov=moderato --cov-report=xml -v
         env:
           REDIS_URL: redis://localhost:6379
 
@@ -116,4 +116,4 @@ jobs:
         run: poetry run black --check .
 
       - name: Run mypy
-        run: poetry run mypy fastlimit --ignore-missing-imports
+        run: poetry run mypy moderato --ignore-missing-imports

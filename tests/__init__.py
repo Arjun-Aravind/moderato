@@ -1,3 +1,3 @@
 """
-FastLimit test suite.
+Moderato test suite.
 """

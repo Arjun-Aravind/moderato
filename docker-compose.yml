@@ -3,7 +3,7 @@ version: '3.8'
 services:
   redis:
     image: redis:7-alpine
-    container_name: fastlimit-redis
+    container_name: moderato-redis
     ports:
       - "6379:6379"
     volumes:
@@ -19,13 +19,13 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - fastlimit-network
+      - moderato-network
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fastlimit-app
+    container_name: moderato-app
     ports:
       - "8000:8000"
     depends_on:
@@ -35,19 +35,19 @@ services:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
     volumes:
-      - ./fastlimit:/app/fastlimit
+      - ./moderato:/app/moderato
       - ./examples:/app/examples
       - ./tests:/app/tests
     command: uvicorn examples.fastapi_app:app --host 0.0.0.0 --port 8000 --reload
     networks:
-      - fastlimit-network
+      - moderato-network
     restart: unless-stopped
 
   multi-tenant:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fastlimit-multi-tenant
+    container_name: moderato-multi-tenant
     ports:
       - "8001:8001"
     depends_on:
@@ -57,16 +57,16 @@ services:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
     volumes:
-      - ./fastlimit:/app/fastlimit
+      - ./moderato:/app/moderato
       - ./examples:/app/examples
     command: uvicorn examples.multi_tenant:app --host 0.0.0.0 --port 8001 --reload
     networks:
-      - fastlimit-network
+      - moderato-network
     restart: unless-stopped
 
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: fastlimit-redis-commander
+    container_name: moderato-redis-commander
     ports:
       - "8081:8081"
     depends_on:
@@ -74,7 +74,7 @@ services:
     environment:
       REDIS_HOSTS: local:redis:6379
     networks:
-      - fastlimit-network
+      - moderato-network
     profiles:
       - debug
 
@@ -82,7 +82,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fastlimit-tests
+    container_name: moderato-tests
     depends_on:
       redis:
         condition: service_healthy
@@ -90,11 +90,11 @@ services:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
     volumes:
-      - ./fastlimit:/app/fastlimit
+      - ./moderato:/app/moderato
       - ./tests:/app/tests
     command: pytest tests/ -v --tb=short
     networks:
-      - fastlimit-network
+      - moderato-network
     profiles:
       - test
 
@@ -102,7 +102,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fastlimit-benchmark
+    container_name: moderato-benchmark
     depends_on:
       redis:
         condition: service_healthy
@@ -110,17 +110,17 @@ services:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
     volumes:
-      - ./fastlimit:/app/fastlimit
+      - ./moderato:/app/moderato
       - ./examples:/app/examples
       - ./benchmarks:/app/benchmarks
     command: python examples/algorithms_demo.py
     networks:
-      - fastlimit-network
+      - moderato-network
     profiles:
       - benchmark
 
 networks:
-  fastlimit-network:
+  moderato-network:
     driver: bridge
 
 volumes:

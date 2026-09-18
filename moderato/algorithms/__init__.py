@@ -6,7 +6,7 @@ These algorithm classes are provided for reference and educational purposes.
 The main RateLimiter class uses the Redis backend directly and does not use
 these classes. For production use, always use the RateLimiter class:
 
-    from fastlimit import RateLimiter
+    from moderato import RateLimiter
 
     limiter = RateLimiter(redis_url="redis://localhost:6379")
     await limiter.check(key="user:123", rate="100/minute", algorithm="sliding_window")

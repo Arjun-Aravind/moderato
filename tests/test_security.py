@@ -1,5 +1,5 @@
 """
-Security-focused tests for FastLimit.
+Security-focused tests for Moderato.
 
 These tests validate:
 - Key collision prevention (NEW-C9 fix)
@@ -10,9 +10,9 @@ These tests validate:
 
 import pytest
 
-from fastlimit import RateLimiter, RateLimitExceeded
-from fastlimit.decorators import RateLimitMiddleware, _get_default_key
-from fastlimit.utils import generate_key
+from moderato import RateLimiter, RateLimitExceeded
+from moderato.decorators import RateLimitMiddleware, _get_default_key
+from moderato.utils import generate_key
 
 
 class TestKeyCollisionPrevention:
@@ -116,7 +116,7 @@ class TestPasswordRedaction:
 
     def test_redact_redis_url_with_password(self):
         """Test that passwords are redacted from Redis URLs."""
-        from fastlimit.backends.redis import _redact_redis_url
+        from moderato.backends.redis import _redact_redis_url
 
         url = "redis://user:secretpassword@localhost:6379/0"
         redacted = _redact_redis_url(url)
@@ -127,7 +127,7 @@ class TestPasswordRedaction:
 
     def test_redact_redis_url_without_password(self):
         """Test that URLs without passwords are unchanged."""
-        from fastlimit.backends.redis import _redact_redis_url
+        from moderato.backends.redis import _redact_redis_url
 
         url = "redis://localhost:6379/0"
         redacted = _redact_redis_url(url)
@@ -138,7 +138,7 @@ class TestPasswordRedaction:
 
     def test_redact_redis_url_only_user(self):
         """Test URL with user but no password."""
-        from fastlimit.backends.redis import _redact_redis_url
+        from moderato.backends.redis import _redact_redis_url
 
         url = "redis://user@localhost:6379"
         redacted = _redact_redis_url(url)
@@ -148,7 +148,7 @@ class TestPasswordRedaction:
 
     def test_redact_redis_url_query_string_password(self):
         """redis-py accepts ?password=... and it must be redacted too."""
-        from fastlimit.backends.redis import _redact_redis_url
+        from moderato.backends.redis import _redact_redis_url
 
         url = "redis://localhost:6379?password=topsecret"
         redacted = _redact_redis_url(url)
@@ -159,7 +159,7 @@ class TestPasswordRedaction:
 
     def test_redact_redis_url_query_string_password_with_userinfo(self):
         """Both credential forms in one URL are redacted."""
-        from fastlimit.backends.redis import _redact_redis_url
+        from moderato.backends.redis import _redact_redis_url
 
         url = "redis://user:infolpass@localhost:6379?password=qssecret"
         redacted = _redact_redis_url(url)
@@ -178,7 +178,7 @@ class TestPasswordRedaction:
         security property is that connect() uses _redact_redis_url().
         """
         # This is a basic validation that _redact_redis_url works
-        from fastlimit.backends.redis import _redact_redis_url
+        from moderato.backends.redis import _redact_redis_url
 
         url = "redis://user:mysecretpassword@localhost:6379"
         redacted = _redact_redis_url(url)
@@ -191,9 +191,9 @@ class TestPasswordRedaction:
         """RateLimiter initialization must not expose Redis passwords in debug logs."""
         import logging
 
-        from fastlimit import RateLimiter
+        from moderato import RateLimiter
 
-        caplog.set_level(logging.DEBUG, logger="fastlimit.limiter")
+        caplog.set_level(logging.DEBUG, logger="moderato.limiter")
         RateLimiter(redis_url="redis://user:mysecretpassword@localhost:6379")
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)

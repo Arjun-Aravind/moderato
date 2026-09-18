@@ -1,4 +1,4 @@
-# FastLimit Development Makefile
+# Moderato Development Makefile
 
 .PHONY: help install dev test lint format clean docker-up docker-down docker-test benchmark commit bump release
 
@@ -12,7 +12,7 @@ YELLOW := \033[1;33m
 NC := \033[0m # No Color
 
 help: ## Show this help message
-	@echo "$(GREEN)FastLimit - Rate Limiting Library$(NC)"
+	@echo "$(GREEN)Moderato - Rate Limiting Library$(NC)"
 	@echo ""
 	@echo "Available commands:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  $(YELLOW)%-15s$(NC) %s\n", $$1, $$2}'
@@ -33,7 +33,7 @@ test: ## Run test suite
 
 test-cov: ## Run tests with coverage
 	@echo "$(GREEN)Running tests with coverage...$(NC)"
-	poetry run pytest tests/ --cov=fastlimit --cov-report=html --cov-report=term
+	poetry run pytest tests/ --cov=moderato --cov-report=html --cov-report=term
 
 # Individual test categories
 test-unit: ## Run unit tests (no Redis required)
@@ -74,13 +74,13 @@ test-all: ## Run complete test suite
 
 lint: ## Run linting checks
 	@echo "$(GREEN)Running linting checks...$(NC)"
-	poetry run ruff check fastlimit/ tests/ examples/
-	poetry run mypy fastlimit/ --ignore-missing-imports
+	poetry run ruff check moderato/ tests/ examples/
+	poetry run mypy moderato/ --ignore-missing-imports
 
 format: ## Format code with black
 	@echo "$(GREEN)Formatting code...$(NC)"
-	poetry run black fastlimit/ tests/ examples/
-	poetry run ruff check --fix fastlimit/ tests/ examples/
+	poetry run black moderato/ tests/ examples/
+	poetry run ruff check --fix moderato/ tests/ examples/
 
 clean: ## Clean up cache and build files
 	@echo "$(GREEN)Cleaning up...$(NC)"

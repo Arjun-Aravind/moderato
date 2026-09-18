@@ -38,8 +38,8 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
 
     Usage:
         from fastapi import FastAPI
-        from fastlimit import RateLimiter
-        from fastlimit.middleware import RateLimitHeadersMiddleware
+        from moderato import RateLimiter
+        from moderato.middleware import RateLimitHeadersMiddleware
 
         app = FastAPI()
         limiter = RateLimiter(redis_url="redis://localhost:6379")

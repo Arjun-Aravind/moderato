@@ -1,3 +1,3 @@
 """
-FastLimit performance benchmarks.
+Moderato performance benchmarks.
 """

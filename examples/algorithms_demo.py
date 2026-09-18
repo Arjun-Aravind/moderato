@@ -15,7 +15,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 
 
 class RateLimitDemo:
@@ -267,7 +267,7 @@ async def main():
     """Run the demo."""
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 
-    print("FastLimit Rate Limiting Demo")
+    print("Moderato Rate Limiting Demo")
     print(f"Redis URL: {redis_url}")
 
     demo = RateLimitDemo(redis_url)

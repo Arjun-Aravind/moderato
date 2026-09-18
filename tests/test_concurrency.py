@@ -1,5 +1,5 @@
 """
-Concurrency and atomicity tests for FastLimit rate limiter.
+Concurrency and atomicity tests for Moderato rate limiter.
 
 These tests validate that:
 - Lua scripts provide atomic operations
@@ -14,7 +14,7 @@ from datetime import datetime
 
 import pytest
 
-from fastlimit import RateLimiter, RateLimitExceeded
+from moderato import RateLimiter, RateLimitExceeded
 
 
 @pytest.mark.asyncio

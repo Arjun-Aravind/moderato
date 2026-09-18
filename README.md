@@ -1,4 +1,6 @@
-# FastLimit
+# Moderato
+
+*In musical notation, **moderato** means "at a moderate pace." Moderato enforces your API's tempo.*
 
 [![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -11,9 +13,9 @@ A high-performance, Redis-backed rate limiting library for Python applications.
 
 ---
 
-## What is FastLimit?
+## What is Moderato?
 
-FastLimit is a rate limiting library designed for modern Python applications. It provides multiple algorithms, automatic header injection, comprehensive metrics, and multi-tenant support out of the box.
+Moderato is a rate limiting library designed for modern Python applications. It provides multiple algorithms, automatic header injection, comprehensive metrics, and multi-tenant support out of the box.
 
 **Use cases:**
 - FastAPI applications requiring rate limiting
@@ -48,17 +50,17 @@ FastLimit is a rate limiting library designed for modern Python applications. It
 ### Installation
 
 ```bash
-pip install fastlimit
+pip install moderato
 
 # With metrics support (optional)
-pip install 'fastlimit[metrics]'
+pip install 'moderato[metrics]'
 ```
 
 ### Basic Example
 
 ```python
 from fastapi import FastAPI, Request
-from fastlimit import RateLimiter, RateLimitHeadersMiddleware
+from moderato import RateLimiter, RateLimitHeadersMiddleware
 
 app = FastAPI()
 limiter = RateLimiter(redis_url="redis://localhost:6379")
@@ -86,7 +88,7 @@ This gives you:
 
 ## Algorithms
 
-FastLimit provides three production-tested algorithms. Choose based on your needs:
+Moderato provides three production-tested algorithms. Choose based on your needs:
 
 ### Fixed Window (Default)
 
@@ -163,7 +165,7 @@ See [ALGORITHMS.md](ALGORITHMS.md) for detailed algorithm comparison.
 ### Configuration
 
 ```python
-from fastlimit import RateLimiter
+from moderato import RateLimiter
 
 limiter = RateLimiter(
     redis_url="redis://localhost:6379",      # Redis connection URL
@@ -226,7 +228,7 @@ async def smooth_endpoint(request: Request):
 Add the middleware to automatically inject rate limit headers:
 
 ```python
-from fastlimit import RateLimitHeadersMiddleware
+from moderato import RateLimitHeadersMiddleware
 
 app.add_middleware(RateLimitHeadersMiddleware)
 ```
@@ -249,10 +251,10 @@ limiter = RateLimiter(
 ```
 
 **Metrics collected:**
-- `fastlimit_checks_total` - Total rate limit checks
-- `fastlimit_check_duration_seconds` - Check latency histogram
-- `fastlimit_limit_exceeded_total` - Rate limit violations
-- `fastlimit_backend_operations_total` - Redis operations
+- `moderato_checks_total` - Total rate limit checks
+- `moderato_check_duration_seconds` - Check latency histogram
+- `moderato_limit_exceeded_total` - Rate limit violations
+- `moderato_backend_operations_total` - Redis operations
 
 **Expose metrics endpoint:**
 ```python
@@ -298,7 +300,7 @@ async def ml_inference(request: Request):
 ### Error Handling
 
 ```python
-from fastlimit import RateLimitExceeded
+from moderato import RateLimitExceeded
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -408,8 +410,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed internals.
 ### Setup
 
 ```bash
-git clone https://github.com/Arjun-Aravind/fastlimit.git
-cd fastlimit
+git clone https://github.com/Arjun-Aravind/moderato.git
+cd moderato
 
 poetry install
 docker-compose -f docker-compose.dev.yml up -d
@@ -430,7 +432,7 @@ make demo          # Run algorithm demo
 
 ## Testing
 
-FastLimit has 60+ comprehensive tests covering:
+Moderato has 60+ comprehensive tests covering:
 
 - All three algorithms (Fixed Window, Token Bucket, Sliding Window)
 - Concurrent requests and race conditions

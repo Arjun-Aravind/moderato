@@ -1,5 +1,5 @@
 """
-Performance benchmarks for FastLimit rate limiter.
+Performance benchmarks for Moderato rate limiter.
 
 Tests throughput, latency, and scalability under various conditions.
 
@@ -26,7 +26,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 
 
 class PerformanceBenchmark:
@@ -524,7 +524,7 @@ async def main(quick: bool = False):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="FastLimit Performance Benchmarks")
+    parser = argparse.ArgumentParser(description="Moderato Performance Benchmarks")
     parser.add_argument(
         "--quick", action="store_true", help="Run quick benchmark with fewer iterations"
     )

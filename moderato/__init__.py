@@ -1,18 +1,18 @@
 """
-FastLimit - Production-ready rate limiting library for Python
+Moderato - Production-ready rate limiting library for Python
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A high-performance, Redis-backed rate limiting library with async support.
 
 Basic usage:
-    >>> from fastlimit import RateLimiter
+    >>> from moderato import RateLimiter
     >>> limiter = RateLimiter(redis_url="redis://localhost:6379")
     >>> await limiter.connect()
     >>> await limiter.check(key="user:123", rate="100/minute")
 
 FastAPI integration:
     >>> from fastapi import FastAPI, Request
-    >>> from fastlimit import RateLimiter
+    >>> from moderato import RateLimiter
     >>>
     >>> app = FastAPI()
     >>> limiter = RateLimiter()
@@ -39,8 +39,8 @@ except ImportError:
     init_metrics = None  # type: ignore[assignment]
 
 __version__ = "0.2.0"
-__author__ = "Arjun"
-__email__ = "arjun@example.com"
+__author__ = "Arjun Aravind"
+__email__ = "arjunaravind748@gmail.com"
 
 __all__ = [
     "RateLimiter",

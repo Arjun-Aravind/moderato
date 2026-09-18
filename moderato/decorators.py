@@ -295,7 +295,8 @@ class RateLimitMiddleware:
 
     Examples:
         >>> from fastapi import FastAPI
-        >>> from fastlimit import RateLimiter, RateLimitMiddleware
+        >>> from moderato import RateLimiter
+        >>> from moderato.decorators import RateLimitMiddleware
         >>>
         >>> app = FastAPI()
         >>> limiter = RateLimiter()

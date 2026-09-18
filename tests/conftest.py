@@ -1,5 +1,5 @@
 """
-Pytest configuration and fixtures for FastLimit tests.
+Pytest configuration and fixtures for Moderato tests.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ import redis.asyncio as redis
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter  # noqa: E402
+from moderato import RateLimiter  # noqa: E402
 
 # Configure logging for tests
 # WARNING (not DEBUG): debug logging of every Redis check slows high-concurrency
@@ -189,7 +189,7 @@ def assert_rate_limited():
     """
 
     def _assert_rate_limited(exc_info, expected_limit: str = None):
-        from fastlimit import RateLimitExceeded
+        from moderato import RateLimitExceeded
 
         assert exc_info.type == RateLimitExceeded
         assert exc_info.value.retry_after > 0

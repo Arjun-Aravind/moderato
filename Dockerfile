@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for FastLimit
+# Multi-stage Dockerfile for Moderato
 FROM python:3.9-slim as builder
 
 # Set working directory
@@ -34,8 +34,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 
 # Create non-root user
-RUN useradd -m -u 1000 fastlimit && chown -R fastlimit:fastlimit /app
-USER fastlimit
+RUN useradd -m -u 1000 moderato && chown -R moderato:moderato /app
+USER moderato
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1

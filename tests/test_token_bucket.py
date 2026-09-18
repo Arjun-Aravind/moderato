@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from fastlimit import RateLimitExceeded
+from moderato import RateLimitExceeded
 from tests.conftest import sleep_past_window_boundary
 
 

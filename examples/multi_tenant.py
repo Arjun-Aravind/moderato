@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 
 app = FastAPI(
     title="Multi-Tenant API",

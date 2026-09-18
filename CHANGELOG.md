@@ -10,13 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING:** Renamed the package from `fastlimit` to `moderato` (`pip install moderato`, `import moderato`). The name `fastlimit` was already taken on PyPI by an unrelated package. In musical notation, moderato means "at a moderate pace" — the library enforces your API's tempo.
+  - **Prometheus metric names change** with the default namespace: `fastlimit_checks_total` becomes `moderato_checks_total` (likewise for all other `fastlimit_*` metrics). Existing dashboards, alerts, and recording rules keyed on the old names will silently lose data. To keep the old metric names while you migrate dashboards, pass the namespace explicitly: `init_metrics(namespace="fastlimit")` or `RateLimitMetrics(namespace="fastlimit")`.
 - Corrected package author metadata to `Arjun Aravind <arjunaravind748@gmail.com>`.
 
 ## [0.1.0] - 2025-01-18
 
 ### Added
 
-- Initial release of moderato
+- Initial release of fastlimit
 - Core rate limiting with Redis backend
 - Token bucket and sliding window algorithms
 - FastAPI integration with `@limiter.limit()` decorator

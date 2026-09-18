@@ -274,3 +274,49 @@ class TestMiddlewareIntegration:
 
             # Headers should be added
             assert "X-RateLimit-Limit" in response.headers
+
+
+class TestRateLimitMiddleware:
+    """Tests for the lower-level ASGI RateLimitMiddleware."""
+
+    @pytest.fixture
+    def app_with_rate_limit_middleware(self, redis_url):
+        import uuid
+
+        from fastlimit.decorators import RateLimitMiddleware
+
+        app = FastAPI()
+        limiter = RateLimiter(
+            redis_url=redis_url, key_prefix=f"test:asgi-middleware:{uuid.uuid4().hex[:8]}"
+        )
+        app.add_middleware(RateLimitMiddleware, limiter=limiter, default_rate="5/minute")
+
+        @app.on_event("startup")
+        async def startup():
+            await limiter.connect()
+
+        @app.on_event("shutdown")
+        async def shutdown():
+            await limiter.close()
+
+        @app.get("/anything")
+        async def anything(request: Request):
+            return {"message": "ok"}
+
+        return app
+
+    def test_429_response_has_standard_headers(self, app_with_rate_limit_middleware):
+        import time
+
+        with TestClient(app_with_rate_limit_middleware) as client:
+            for _ in range(5):
+                assert client.get("/anything").status_code == 200
+
+            before = int(time.time())
+            response = client.get("/anything")
+
+        assert response.status_code == 429
+        assert response.headers["X-RateLimit-Limit"] == "5"
+        assert response.headers["X-RateLimit-Remaining"] == "0"
+        assert int(response.headers["Retry-After"]) > 0
+        assert int(response.headers["X-RateLimit-Reset"]) > before

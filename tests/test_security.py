@@ -165,6 +165,19 @@ class TestPasswordRedaction:
         assert "[REDACTED]" in redacted
         assert "localhost" in redacted
 
+    def test_password_not_in_init_log(self, caplog):
+        """RateLimiter initialization must not expose Redis passwords in debug logs."""
+        import logging
+
+        from fastlimit import RateLimiter
+
+        caplog.set_level(logging.DEBUG, logger="fastlimit.limiter")
+        RateLimiter(redis_url="redis://user:mysecretpassword@localhost:6379")
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "mysecretpassword" not in log_text
+        assert "[REDACTED]" in log_text
+
 
 class TestProxyHeaderSecurity:
     """

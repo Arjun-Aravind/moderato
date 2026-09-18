@@ -82,9 +82,8 @@ class TokenBucket(RateLimitAlgorithm):
             - Refills at 1666.67 tokens/sec
             - Max capacity: 100000 tokens
         """
-        # Calculate refill rate (tokens per second as integer)
-        # For 100/minute: 100000 / 60 = 1666 tokens/sec
-        refill_rate_per_second = max_requests // window_seconds
+        # Preserve fractional refill rates so limits such as 1/hour can recover.
+        refill_rate_per_second = max_requests / window_seconds
 
         # Get current timestamp in milliseconds
         current_time_ms = int(time.time() * 1000)

@@ -15,6 +15,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from .exceptions import RateLimitExceeded
+from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         except RateLimitExceeded as exc:
             # Rate limit was exceeded - add headers with retry info
             headers = self._create_rate_limit_headers(
-                limit=exc.limit,
+                limit=str(parse_rate(exc.limit)[0]),
                 remaining=0,
                 reset_timestamp=int(time.time()) + exc.retry_after,
                 retry_after=exc.retry_after,

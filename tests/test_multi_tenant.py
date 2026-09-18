@@ -214,7 +214,7 @@ class TestMultiTenant:
         # Headers should reflect tenant-specific limit
         assert hasattr(request.state, "rate_limit_headers")
         headers = request.state.rate_limit_headers
-        assert headers["X-RateLimit-Limit"] == "5/minute"
+        assert headers["X-RateLimit-Limit"] == "5"
         assert headers["X-RateLimit-Remaining"] == "0"
 
     @pytest.mark.asyncio

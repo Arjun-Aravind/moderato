@@ -4,12 +4,14 @@ Decorator implementations for rate limiting.
 
 import functools
 import logging
+import time
 from inspect import iscoroutinefunction
 from typing import Any, Callable, Optional, TypeVar
 
 from typing_extensions import ParamSpec
 
 from .exceptions import RateLimitExceeded
+from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
 
@@ -226,9 +228,12 @@ async def _check_rate_limit(
         # This allows middleware to add them to the response
         if hasattr(request, "state"):
             request.state.rate_limit_headers = {
-                "X-RateLimit-Limit": rate,
+                "X-RateLimit-Limit": str(parse_rate(rate)[0]),
                 "X-RateLimit-Remaining": str(e.remaining),
-                "X-RateLimit-Reset": str(e.retry_after),
+                # reset_timestamp combines app time with retry_after derived
+                # from Redis server time; assume app and Redis clocks are
+                # aligned (single-host NTP is the normal deployment).
+                "X-RateLimit-Reset": str(int(time.time()) + e.retry_after),
                 "Retry-After": str(e.retry_after),
             }
 
@@ -375,8 +380,9 @@ class RateLimitMiddleware:
                     "headers": [
                         (b"content-type", b"application/json"),
                         (b"retry-after", str(e.retry_after).encode()),
-                        (b"x-ratelimit-limit", self.default_rate.encode()),
+                        (b"x-ratelimit-limit", str(parse_rate(self.default_rate)[0]).encode()),
                         (b"x-ratelimit-remaining", str(e.remaining).encode()),
+                        (b"x-ratelimit-reset", str(int(time.time()) + e.retry_after).encode()),
                     ],
                 }
             )

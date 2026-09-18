@@ -146,6 +146,28 @@ class TestPasswordRedaction:
         # Should work without crashing
         assert "localhost" in redacted
 
+    def test_redact_redis_url_query_string_password(self):
+        """redis-py accepts ?password=... and it must be redacted too."""
+        from fastlimit.backends.redis import _redact_redis_url
+
+        url = "redis://localhost:6379?password=topsecret"
+        redacted = _redact_redis_url(url)
+
+        assert "topsecret" not in redacted
+        assert "password=[REDACTED]" in redacted
+        assert "localhost" in redacted
+
+    def test_redact_redis_url_query_string_password_with_userinfo(self):
+        """Both credential forms in one URL are redacted."""
+        from fastlimit.backends.redis import _redact_redis_url
+
+        url = "redis://user:infolpass@localhost:6379?password=qssecret"
+        redacted = _redact_redis_url(url)
+
+        assert "infolpass" not in redacted
+        assert "qssecret" not in redacted
+        assert "[REDACTED]" in redacted
+
     def test_password_not_in_connect_logs(self, caplog):
         """
         Test that password is not logged during connect.
@@ -164,6 +186,19 @@ class TestPasswordRedaction:
         assert "mysecretpassword" not in redacted
         assert "[REDACTED]" in redacted
         assert "localhost" in redacted
+
+    def test_password_not_in_init_log(self, caplog):
+        """RateLimiter initialization must not expose Redis passwords in debug logs."""
+        import logging
+
+        from fastlimit import RateLimiter
+
+        caplog.set_level(logging.DEBUG, logger="fastlimit.limiter")
+        RateLimiter(redis_url="redis://user:mysecretpassword@localhost:6379")
+
+        log_text = "\n".join(record.getMessage() for record in caplog.records)
+        assert "mysecretpassword" not in log_text
+        assert "[REDACTED]" in log_text
 
 
 class TestProxyHeaderSecurity:

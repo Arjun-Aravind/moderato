@@ -687,11 +687,15 @@ def _redact_redis_url(url: str) -> str:
     """
     Redact password from Redis URL for safe logging.
 
+    Handles both credential forms redis-py accepts:
+    - userinfo: redis://user:password@host
+    - query string: redis://host?password=password
+
     Args:
         url: Redis connection URL (may contain password)
 
     Returns:
-        URL with password replaced by [REDACTED]
+        URL with passwords replaced by [REDACTED]
 
     Examples:
         >>> _redact_redis_url("redis://localhost:6379")
@@ -720,8 +724,20 @@ def _redact_redis_url(url: str) -> str:
 
             # Rebuild URL with redacted password
             redacted = parsed._replace(netloc=new_netloc)
-            return urlunparse(redacted)
-        return url
+            return _redact_query_passwords(urlunparse(redacted))
+        return _redact_query_passwords(url)
     except Exception:
         # If parsing fails, return a safe generic message
         return "redis://[URL_PARSE_ERROR]"
+
+
+def _redact_query_passwords(url: str) -> str:
+    """Redact credential-bearing query parameters (e.g. ?password=secret)."""
+    import re
+
+    return re.sub(
+        r"([?&])(?:password|pwd)=([^&]*)",
+        r"\1password=[REDACTED]",
+        url,
+        flags=re.IGNORECASE,
+    )

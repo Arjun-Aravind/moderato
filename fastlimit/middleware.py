@@ -15,6 +15,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp
 
 from .exceptions import RateLimitExceeded
+from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
 
@@ -96,10 +97,20 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
             return response
 
         except RateLimitExceeded as exc:
-            # Rate limit was exceeded - add headers with retry info
+            # Rate limit was exceeded - add headers with retry info.
+            # exc.limit may be a rate string ("100/minute") or a plain number
+            # from a manually raised exception; never fail the 429 on parsing.
+            try:
+                limit_display = str(parse_rate(exc.limit)[0])
+            except (ValueError, AttributeError, TypeError):
+                limit_display = str(exc.limit)
+
             headers = self._create_rate_limit_headers(
-                limit=exc.limit,
+                limit=limit_display,
                 remaining=0,
+                # reset_timestamp combines app time with retry_after derived
+                # from Redis server time; assume app and Redis clocks are
+                # aligned (single-host NTP is the normal deployment).
                 reset_timestamp=int(time.time()) + exc.retry_after,
                 retry_after=exc.retry_after,
             )

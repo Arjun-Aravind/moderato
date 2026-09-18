@@ -184,9 +184,10 @@ class TestDecorators:
         assert hasattr(request.state, "rate_limit_headers")
         headers = request.state.rate_limit_headers
         assert "X-RateLimit-Limit" in headers
-        assert headers["X-RateLimit-Limit"] == "5/minute"
+        assert headers["X-RateLimit-Limit"] == "5"
         assert "X-RateLimit-Remaining" in headers
         assert "Retry-After" in headers
+        assert int(headers["X-RateLimit-Reset"]) > 1_000_000_000
 
     @pytest.mark.asyncio
     async def test_decorator_error_handling(self, clean_limiter):

@@ -7,7 +7,7 @@ import logging
 from types import TracebackType
 from typing import Any, Callable, Optional
 
-from .backends.redis import RedisBackend
+from .backends.redis import RedisBackend, _redact_redis_url
 from .exceptions import RateLimitConfigError, RateLimitExceeded
 from .models import CheckResult, RateLimitConfig
 from .utils import _url_encode_key_component, generate_key, get_time_window, parse_rate
@@ -96,7 +96,10 @@ class RateLimiter:
         self._connected = False
         self._lock = asyncio.Lock()  # For thread-safe connection
 
-        logger.debug(f"Initialized RateLimiter with config: {self.config}")
+        redacted_config = self.config.model_copy(
+            update={"redis_url": _redact_redis_url(self.config.redis_url)}
+        )
+        logger.debug(f"Initialized RateLimiter with config: {redacted_config}")
 
     async def __aenter__(self) -> "RateLimiter":
         """Async context manager entry."""

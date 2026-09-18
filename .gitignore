@@ -96,5 +96,8 @@ local_docs/
 # Temporary directory
 tmp/
 
+# Amp service portal state
+.amp/portals/
+
 # Rope project
 .ropeproject/

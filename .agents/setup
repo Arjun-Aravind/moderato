@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+export PATH="$HOME/.local/bin:$PATH"
+
+run_step() {
+  local label="$1"
+  shift
+  local started
+  started="$(date +%s)"
+  echo "==> $label"
+  "$@"
+  echo "<== $label completed in $(( $(date +%s) - started ))s"
+}
+
+if ! command -v redis-server >/dev/null 2>&1; then
+  run_step "Updating apt package index" sudo apt-get update
+  run_step "Installing Redis" sudo apt-get install -y redis-server
+fi
+
+if ! command -v poetry >/dev/null 2>&1; then
+  run_step "Installing Poetry" uv tool install poetry
+fi
+
+run_step "Installing Python 3.12" uv python install 3.12
+
+if [ ! -x .venv/bin/python ] || ! .venv/bin/python --version | grep -q '^Python 3\.12\.'; then
+  rm -rf .venv
+  run_step "Creating Python virtual environment" uv venv --python 3.12 .venv
+fi
+
+run_step "Selecting the project virtual environment" poetry env use "$repo_root/.venv/bin/python"
+run_step "Installing Python dependencies" poetry install --all-groups --no-interaction
+
+echo "Orb setup complete. Run 'amp orb services ensure' to start Redis."

@@ -230,6 +230,9 @@ async def _check_rate_limit(
             request.state.rate_limit_headers = {
                 "X-RateLimit-Limit": str(parse_rate(rate)[0]),
                 "X-RateLimit-Remaining": str(e.remaining),
+                # reset_timestamp combines app time with retry_after derived
+                # from Redis server time; assume app and Redis clocks are
+                # aligned (single-host NTP is the normal deployment).
                 "X-RateLimit-Reset": str(int(time.time()) + e.retry_after),
                 "Retry-After": str(e.retry_after),
             }

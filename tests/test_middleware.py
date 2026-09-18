@@ -2,7 +2,10 @@
 Tests for rate limit headers middleware.
 """
 
+import asyncio
+
 import pytest
+import redis as sync_redis
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -12,6 +15,13 @@ from fastlimit import RateLimiter, RateLimitHeadersMiddleware
 @pytest.fixture
 def app_with_middleware(redis_url):
     """Create FastAPI app with rate limit middleware."""
+    # Flush Redis so each test starts with clean rate limit state.
+    # Without this, the fixed key_prefix + shared IP key means tests
+    # consume each other's quotas and fail in an order-dependent way.
+    client = sync_redis.from_url(redis_url)
+    client.flushdb()
+    client.close()
+
     app = FastAPI()
     limiter = RateLimiter(redis_url=redis_url, key_prefix="test:middleware")
 
@@ -49,170 +59,168 @@ class TestRateLimitHeadersMiddleware:
 
     def test_successful_request_has_headers(self, app_with_middleware):
         """Test that successful requests include rate limit headers."""
-        client = TestClient(app_with_middleware)
+        # Enter the client context so all requests share one event loop.
+        # Without it, starlette spins up a new loop per request and the
+        # Redis connection pool is left bound to a closed loop.
+        with TestClient(app_with_middleware) as client:
+            response = client.get("/limited")
 
-        response = client.get("/limited")
+            assert response.status_code == 200
+            # Check that rate limit headers are present
+            assert "X-RateLimit-Limit" in response.headers
+            assert "X-RateLimit-Remaining" in response.headers
+            assert "X-RateLimit-Reset" in response.headers
 
-        assert response.status_code == 200
-        # Check that rate limit headers are present
-        assert "X-RateLimit-Limit" in response.headers
-        assert "X-RateLimit-Remaining" in response.headers
-        assert "X-RateLimit-Reset" in response.headers
-
-        # Verify header values
-        assert response.headers["X-RateLimit-Limit"] == "5"
-        remaining = int(response.headers["X-RateLimit-Remaining"])
-        assert 0 <= remaining <= 5
+            # Verify header values
+            assert response.headers["X-RateLimit-Limit"] == "5"
+            remaining = int(response.headers["X-RateLimit-Remaining"])
+            assert 0 <= remaining <= 5
 
     def test_rate_limited_request_has_retry_after(self, app_with_middleware):
         """Test that rate limited requests include Retry-After header."""
-        client = TestClient(app_with_middleware)
+        with TestClient(app_with_middleware) as client:
+            # Make 5 requests (the limit)
+            for _ in range(5):
+                response = client.get("/limited")
+                assert response.status_code == 200
 
-        # Make 5 requests (the limit)
-        for i in range(5):
+            # 6th request should be rate limited
             response = client.get("/limited")
-            assert response.status_code == 200
 
-        # 6th request should be rate limited
-        response = client.get("/limited")
-
-        assert response.status_code == 429
-        assert "X-RateLimit-Limit" in response.headers
-        assert "X-RateLimit-Remaining" in response.headers
-        assert response.headers["X-RateLimit-Remaining"] == "0"
-        assert "Retry-After" in response.headers
-        retry_after = int(response.headers["Retry-After"])
-        assert retry_after > 0
+            assert response.status_code == 429
+            assert "X-RateLimit-Limit" in response.headers
+            assert "X-RateLimit-Remaining" in response.headers
+            assert response.headers["X-RateLimit-Remaining"] == "0"
+            assert "Retry-After" in response.headers
+            retry_after = int(response.headers["Retry-After"])
+            assert retry_after > 0
 
     def test_remaining_count_decreases(self, app_with_middleware):
         """Test that remaining count decreases with each request."""
-        client = TestClient(app_with_middleware)
-
-        # Make multiple requests and verify remaining count
-        for expected_remaining in [4, 3, 2, 1, 0]:
-            response = client.get("/limited")
-            assert response.status_code == 200
-            remaining = int(response.headers["X-RateLimit-Remaining"])
-            assert remaining == expected_remaining
+        with TestClient(app_with_middleware) as client:
+            # Make multiple requests and verify remaining count
+            for expected_remaining in [4, 3, 2, 1, 0]:
+                response = client.get("/limited")
+                assert response.status_code == 200
+                remaining = int(response.headers["X-RateLimit-Remaining"])
+                assert remaining == expected_remaining
 
     def test_endpoint_without_rate_limit(self, app_with_middleware):
         """Test that endpoints without rate limits don't add headers."""
-        client = TestClient(app_with_middleware)
+        with TestClient(app_with_middleware) as client:
+            response = client.get("/no-limit")
 
-        response = client.get("/no-limit")
-
-        assert response.status_code == 200
-        # These endpoints shouldn't have rate limit headers
-        assert "X-RateLimit-Limit" not in response.headers
+            assert response.status_code == 200
+            # These endpoints shouldn't have rate limit headers
+            assert "X-RateLimit-Limit" not in response.headers
 
     def test_reset_timestamp_in_future(self, app_with_middleware):
         """Test that reset timestamp is in the future."""
         import time
 
-        client = TestClient(app_with_middleware)
+        with TestClient(app_with_middleware) as client:
+            response = client.get("/limited")
+            assert response.status_code == 200
 
-        response = client.get("/limited")
-        assert response.status_code == 200
+            reset_timestamp = int(response.headers["X-RateLimit-Reset"])
+            current_time = int(time.time())
 
-        reset_timestamp = int(response.headers["X-RateLimit-Reset"])
-        current_time = int(time.time())
-
-        # Reset should be in the future (within 60 seconds for minute limit)
-        assert reset_timestamp > current_time
-        assert reset_timestamp <= current_time + 60
+            # Reset should be in the future (within 60 seconds for minute limit)
+            assert reset_timestamp > current_time
+            assert reset_timestamp <= current_time + 60
 
     def test_expensive_request_with_cost(self, app_with_middleware):
         """Test that cost-based rate limiting works with headers."""
-        client = TestClient(app_with_middleware)
+        with TestClient(app_with_middleware) as client:
+            # First request with cost=5 should use half the limit (10/minute, cost=5)
+            response = client.get("/expensive")
+            assert response.status_code == 200
+            assert "X-RateLimit-Limit" in response.headers
+            assert response.headers["X-RateLimit-Limit"] == "10"
 
-        # First request with cost=5 should use half the limit (10/minute, cost=5)
-        response = client.get("/expensive")
-        assert response.status_code == 200
-        assert "X-RateLimit-Limit" in response.headers
-        assert response.headers["X-RateLimit-Limit"] == "10"
+            remaining = int(response.headers["X-RateLimit-Remaining"])
+            # Should have 5 remaining (10 - 5)
+            assert remaining == 5
 
-        remaining = int(response.headers["X-RateLimit-Remaining"])
-        # Should have 5 remaining (10 - 5)
-        assert remaining == 5
+            # Second request should use remaining 5
+            response = client.get("/expensive")
+            assert response.status_code == 200
+            remaining = int(response.headers["X-RateLimit-Remaining"])
+            assert remaining == 0
 
-        # Second request should use remaining 5
-        response = client.get("/expensive")
-        assert response.status_code == 200
-        remaining = int(response.headers["X-RateLimit-Remaining"])
-        assert remaining == 0
-
-        # Third request should be rate limited
-        response = client.get("/expensive")
-        assert response.status_code == 429
+            # Third request should be rate limited
+            response = client.get("/expensive")
+            assert response.status_code == 429
 
     def test_rate_limit_error_response(self, app_with_middleware):
         """Test that rate limit error responses are properly formatted."""
-        client = TestClient(app_with_middleware)
+        with TestClient(app_with_middleware) as client:
+            # Exhaust the limit
+            for _ in range(5):
+                client.get("/limited")
 
-        # Exhaust the limit
-        for _ in range(5):
-            client.get("/limited")
+            # Next request should return 429 with error details
+            response = client.get("/limited")
 
-        # Next request should return 429 with error details
-        response = client.get("/limited")
+            assert response.status_code == 429
+            data = response.json()
+            assert "error" in data
+            assert "retry_after" in data
+            assert data["error"] == "Rate limit exceeded"
 
-        assert response.status_code == 429
-        data = response.json()
-        assert "error" in data
-        assert "retry_after" in data
-        assert data["error"] == "Rate limit exceeded"
-
-    def test_concurrent_requests(self, app_with_middleware):
+    async def test_concurrent_requests(self, app_with_middleware):
         """Test that headers are correct with concurrent requests."""
-        import concurrent.futures
+        import httpx
 
-        client = TestClient(app_with_middleware)
+        # Drive the ASGI app with a single event loop. TestClient called from
+        # multiple threads runs each request in its own anyio portal event
+        # loop, and the shared Redis client / asyncio.Lock are loop-bound,
+        # which deadlocks the process at exit.
+        transport = httpx.ASGITransport(app=app_with_middleware)
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
 
-        def make_request():
-            return client.get("/limited")
+                async def make_request():
+                    return await client.get("/limited")
 
-        # Make concurrent requests
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(make_request) for _ in range(5)]
-            responses = [f.result() for f in futures]
+                responses = await asyncio.gather(*[make_request() for _ in range(5)])
 
-        # All should succeed (within limit)
-        assert all(r.status_code == 200 for r in responses)
+            # All should succeed (within limit)
+            assert all(r.status_code == 200 for r in responses)
 
-        # All should have rate limit headers
-        assert all("X-RateLimit-Remaining" in r.headers for r in responses)
+            # All should have rate limit headers
+            assert all("X-RateLimit-Remaining" in r.headers for r in responses)
+        finally:
+            # ASGITransport never runs lifespan events, so close the limiter
+            # explicitly to release its Redis connection on this loop - even
+            # when an assertion above fails.
+            await app_with_middleware.state.limiter.close()
 
     def test_headers_with_different_ips(self, app_with_middleware):
         """Test that different IPs get separate rate limits."""
-        from fastapi.testclient import TestClient
-
-        # Create clients with different IPs (simulated)
-        client1 = TestClient(app_with_middleware)
-        client2 = TestClient(app_with_middleware)
-
         # Note: TestClient doesn't easily support different IPs,
         # but we can verify that the same client maintains state
-        response1 = client1.get("/limited")
-        response2 = client1.get("/limited")
+        with TestClient(app_with_middleware) as client1:
+            response1 = client1.get("/limited")
+            response2 = client1.get("/limited")
 
-        assert response1.status_code == 200
-        assert response2.status_code == 200
+            assert response1.status_code == 200
+            assert response2.status_code == 200
 
-        remaining1 = int(response1.headers["X-RateLimit-Remaining"])
-        remaining2 = int(response2.headers["X-RateLimit-Remaining"])
+            remaining1 = int(response1.headers["X-RateLimit-Remaining"])
+            remaining2 = int(response2.headers["X-RateLimit-Remaining"])
 
-        # Second request should have less remaining
-        assert remaining2 < remaining1
+            # Second request should have less remaining
+            assert remaining2 < remaining1
 
 
-@pytest.mark.asyncio
 class TestMiddlewareIntegration:
     """Integration tests for middleware with actual rate limiter."""
 
     async def test_middleware_with_limiter_check(self, clean_limiter):
         """Test middleware integration with actual limiter."""
+        import httpx
         from fastapi import FastAPI, Request
-        from fastapi.testclient import TestClient
 
         app = FastAPI()
         limiter = clean_limiter
@@ -224,23 +232,25 @@ class TestMiddlewareIntegration:
         async def test_endpoint(request: Request):
             return {"status": "ok"}
 
-        client = TestClient(app)
+        # The limiter is connected on the test's event loop (async fixture),
+        # so the app must be driven on that same loop - not in TestClient's portal.
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            # Make requests up to the limit
+            for _ in range(3):
+                response = await client.get("/test")
+                assert response.status_code == 200
+                assert "X-RateLimit-Limit" in response.headers
 
-        # Make requests up to the limit
-        for i in range(3):
-            response = client.get("/test")
-            assert response.status_code == 200
-            assert "X-RateLimit-Limit" in response.headers
-
-        # Next request should fail
-        response = client.get("/test")
-        assert response.status_code == 429
-        assert "Retry-After" in response.headers
+            # Next request should fail
+            response = await client.get("/test")
+            assert response.status_code == 429
+            assert "Retry-After" in response.headers
 
     async def test_middleware_preserves_response_body(self, clean_limiter):
         """Test that middleware doesn't alter response body."""
+        import httpx
         from fastapi import FastAPI, Request
-        from fastapi.testclient import TestClient
 
         app = FastAPI()
         limiter = clean_limiter
@@ -252,15 +262,15 @@ class TestMiddlewareIntegration:
         async def data_endpoint(request: Request):
             return {"data": "test", "count": 123}
 
-        client = TestClient(app)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/data")
+            assert response.status_code == 200
 
-        response = client.get("/data")
-        assert response.status_code == 200
+            # Response body should be intact
+            data = response.json()
+            assert data["data"] == "test"
+            assert data["count"] == 123
 
-        # Response body should be intact
-        data = response.json()
-        assert data["data"] == "test"
-        assert data["count"] == 123
-
-        # Headers should be added
-        assert "X-RateLimit-Limit" in response.headers
+            # Headers should be added
+            assert "X-RateLimit-Limit" in response.headers

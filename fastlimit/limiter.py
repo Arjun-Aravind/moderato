@@ -10,9 +10,39 @@ from typing import Any, Callable, Optional
 from .backends.redis import RedisBackend
 from .exceptions import RateLimitConfigError, RateLimitExceeded
 from .models import CheckResult, RateLimitConfig
-from .utils import generate_key, get_time_window, parse_rate
+from .utils import _url_encode_key_component, generate_key, get_time_window, parse_rate
 
 logger = logging.getLogger(__name__)
+
+
+def _escape_glob(value: str) -> str:
+    """Escape Redis glob metacharacters so a MATCH pattern matches literally."""
+    for ch in ("\\", "*", "?", "["):
+        value = value.replace(ch, f"\\{ch}")
+    return value
+
+
+def _suffix_matches_algorithm(suffix: str, algorithm: str) -> bool:
+    """Classify a rate limit key by the suffix after ``prefix:key:tenant``.
+
+    Parsing only the suffix keeps tenant names (even one literally called
+    "sliding" or ending in "bucket") from affecting classification.
+    Shapes:
+    - token bucket: "bucket"
+    - sliding window: "sliding:{window_start}"
+    - fixed window: "{window_start}"
+    """
+    parts = suffix.split(":")
+    if len(parts) < 2:
+        return False
+    rest = parts[1:]  # drop the tenant component
+    if algorithm == "token_bucket":
+        return rest == ["bucket"]
+    if algorithm == "sliding_window":
+        return len(rest) == 2 and rest[0] == "sliding" and rest[1].isdigit()
+    if algorithm == "fixed_window":
+        return len(rest) == 1 and rest[0].isdigit()
+    return True
 
 
 class RateLimiter:
@@ -255,9 +285,10 @@ class RateLimiter:
                 "bucket",  # Static suffix instead of time window
             )
             # Use milliseconds for precision with low rates (e.g., 1/hour)
-            # refill_rate = max_requests / window_seconds (tokens per second, integer)
-            # Lua script will use ms timestamps for sub-second refill precision
-            refill_rate_per_second = max_requests // window_seconds
+            # refill_rate = max_requests / window_seconds (tokens per second).
+            # Keep as float: integer division would truncate low rates like
+            # 1/hour (1000 // 3600 == 0) to a bucket that never refills.
+            refill_rate_per_second = max_requests / window_seconds
             current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
             result = await self.backend.check_token_bucket(
                 key=full_key,
@@ -390,7 +421,10 @@ class RateLimiter:
             key: Unique identifier for the rate limit
             algorithm: Algorithm used (defaults to config.default_algorithm).
                        Use "all" to reset keys for all algorithms.
-            tenant_type: Tenant type (defaults to "default")
+            tenant_type: Tenant type to reset (e.g., "free", "premium").
+                         Defaults to None which resets ALL tenant types for
+                         this key. Pass "default" explicitly to reset only
+                         the default tenant.
 
         Returns:
             True if reset was successful, False if key didn't exist
@@ -407,6 +441,11 @@ class RateLimiter:
         """
         if not self._connected:
             await self.connect()
+
+        # No tenant_type means reset every tenant type for this key.
+        # A single SCAN + delete covers all algorithms and windows at once.
+        if tenant_type is None:
+            return await self._reset_all_tenants(key, algorithm)
 
         tenant_type = tenant_type or "default"
         algorithm = algorithm or self.config.default_algorithm
@@ -431,6 +470,53 @@ class RateLimiter:
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
 
         return reset_success
+
+    async def _reset_all_tenants(self, key: str, algorithm: Optional[str] = None) -> bool:
+        """Reset rate limit keys for every tenant type of this key.
+
+        Scans for keys shaped ``{prefix}:{encoded_key}:*`` which covers all
+        tenant types, algorithms, and time windows in one pass. If an
+        ``algorithm`` is given, only keys for that algorithm are deleted.
+        Note: keys longer than 200 chars are SHA-hashed (see utils.hash_key)
+        and cannot be matched by this scan; use reset(..., tenant_type=...)
+        with the exact tenant for those.
+        """
+        if not self._connected:
+            await self.connect()
+
+        if algorithm is not None and algorithm not in (
+            "all",
+            "fixed_window",
+            "token_bucket",
+            "sliding_window",
+        ):
+            raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
+
+        # URL-encoding already strips Redis glob metacharacters from the key,
+        # but the configured prefix is user input - escape it for MATCH.
+        encoded_key = _url_encode_key_component(key)
+        pattern = f"{_escape_glob(self.config.key_prefix)}:{encoded_key}:*"
+        # Everything after "{prefix}:{encoded_key}:" is "{tenant}:{suffix}"
+        # (+1 skips the separator colon before the tenant)
+        suffix_offset = len(self.config.key_prefix) + 1 + len(encoded_key) + 1
+
+        # Stream keys and delete in batches so peak memory stays bounded
+        check_algorithm = algorithm if algorithm not in (None, "all") else None
+        deleted_any = False
+        batch: list[str] = []
+        async for full_key in self.backend.iter_keys(pattern):
+            if check_algorithm is not None and not _suffix_matches_algorithm(
+                full_key[suffix_offset:], check_algorithm
+            ):
+                continue
+            batch.append(full_key)
+            if len(batch) >= 100:
+                if await self.backend.delete_many(batch):
+                    deleted_any = True
+                batch = []
+        if batch and await self.backend.delete_many(batch):
+            deleted_any = True
+        return deleted_any
 
     async def _reset_fixed_window(self, key: str, tenant_type: str, current_time: int) -> bool:
         """Reset fixed window rate limit keys."""
@@ -597,7 +683,7 @@ class RateLimiter:
 
         # Calculate tokens after refill since last update
         max_tokens = max_requests * 1000
-        refill_rate_per_second = max_tokens // window_seconds
+        refill_rate_per_second = max_tokens / window_seconds
 
         if last_refill_ms > 0:
             current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
@@ -608,8 +694,8 @@ class RateLimiter:
             # Bucket not yet created, would start full
             current_tokens = max_tokens
 
-        # Convert from integer math
-        tokens_display = current_tokens // 1000
+        # Convert from integer math (float refill rate can leak floats here)
+        tokens_display = int(current_tokens // 1000)
         remaining = tokens_display  # Tokens are what's remaining
 
         # Estimate TTL (bucket keys use 2*window + 60s expiry)

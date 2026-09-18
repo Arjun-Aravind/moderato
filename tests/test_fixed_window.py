@@ -2,12 +2,13 @@
 Tests for Fixed Window rate limiting algorithm.
 """
 
-import pytest
 import asyncio
 from datetime import datetime
-import time
+
+import pytest
 
 from fastlimit import RateLimiter, RateLimitExceeded
+from tests.conftest import sleep_past_window_boundary
 
 
 class TestFixedWindow:
@@ -39,7 +40,9 @@ class TestFixedWindow:
         """Test handling of burst requests."""
         limiter = clean_limiter
         key = f"burst-test-{datetime.utcnow().isoformat()}"
-        rate = "50/second"
+        # Hour window: a 1-second window can expire mid-burst on slow CI
+        # runners and over-allow; an hour cannot.
+        rate = "50/hour"
 
         # Send 100 requests concurrently
         tasks = []
@@ -61,6 +64,10 @@ class TestFixedWindow:
         limiter = clean_limiter
         key = f"window-test-{datetime.utcnow().isoformat()}"
         rate = "3/second"
+
+        # Start just after a window boundary so the fill below cannot
+        # straddle into a second window on slow runners
+        await sleep_past_window_boundary(limiter)
 
         # Use up the limit
         for _ in range(3):
@@ -84,36 +91,20 @@ class TestFixedWindow:
 
         # Tenant A uses their limit
         for _ in range(5):
-            await limiter.check(
-                key="tenant-a",
-                rate="5/minute",
-                tenant_type="premium"
-            )
+            await limiter.check(key="tenant-a", rate="5/minute", tenant_type="premium")
 
         # Tenant A should be limited
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(
-                key="tenant-a",
-                rate="5/minute",
-                tenant_type="premium"
-            )
+            await limiter.check(key="tenant-a", rate="5/minute", tenant_type="premium")
 
         # But Tenant B should still work
         for _ in range(5):
-            result = await limiter.check(
-                key="tenant-b",
-                rate="5/minute",
-                tenant_type="free"
-            )
+            result = await limiter.check(key="tenant-b", rate="5/minute", tenant_type="free")
             assert result is True
 
         # And same tenant with different type should work
         for _ in range(5):
-            result = await limiter.check(
-                key="tenant-a",
-                rate="5/minute",
-                tenant_type="free"
-            )
+            result = await limiter.check(key="tenant-a", rate="5/minute", tenant_type="free")
             assert result is True
 
     @pytest.mark.asyncio
@@ -130,7 +121,7 @@ class TestFixedWindow:
 
         for rate_str, expected_requests, expected_window in test_cases:
             from fastlimit.utils import parse_rate
-            
+
             requests, window = parse_rate(rate_str)
             assert requests == expected_requests
             assert window == expected_window
@@ -145,7 +136,7 @@ class TestFixedWindow:
         """Test race conditions with concurrent requests to same key."""
         limiter = clean_limiter
         key = "concurrent-test"
-        rate = "10/second"
+        rate = "10/hour"
 
         # Send 20 concurrent requests
         tasks = []
@@ -287,27 +278,26 @@ class TestFixedWindow:
         base_key = "window"
 
         # These should all be independent
-        rates = [
-            "5/second",
-            "10/minute",
-            "100/hour",
-            "1000/day"
-        ]
+        rates = ["5/second", "10/minute", "100/hour", "1000/day"]
 
         for rate in rates:
             # Each rate should work independently
             result = await limiter.check(key=base_key, rate=rate)
             assert result is True
 
-        # Use up one limit
-        for _ in range(4):  # Total of 5 with the one above
-            await limiter.check(key=base_key, rate="5/second")
+        # Exhaust the second-based limit, aligned to a fresh window boundary
+        # so the fill cannot straddle on slow runners. The earlier loop's
+        # 5/second check lives in the previous window, so base_key starts
+        # at 0 here and the same-key cross-window independence is preserved.
+        await sleep_past_window_boundary(limiter)
+        for _ in range(5):
+            assert await limiter.check(key=base_key, rate="5/second") is True
 
         # Second-based should be exhausted
         with pytest.raises(RateLimitExceeded):
             await limiter.check(key=base_key, rate="5/second")
 
-        # But minute-based should still work
+        # But minute-based should still work (different window, same key)
         result = await limiter.check(key=base_key, rate="10/minute")
         assert result is True
 

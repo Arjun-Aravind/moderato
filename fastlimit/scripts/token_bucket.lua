@@ -3,7 +3,7 @@
 --
 -- KEYS[1] = rate limit key (e.g., "ratelimit:tenant123:premium:bucket")
 -- ARGV[1] = max_tokens (bucket capacity, e.g., 100000 for 100 tokens with 1000x multiplier)
--- ARGV[2] = refill_rate_per_second (tokens per second, integer with 1000x multiplier)
+-- ARGV[2] = refill_rate_per_second (tokens per second, float with 1000x multiplier)
 -- ARGV[3] = window_seconds (window duration for TTL calculation)
 -- ARGV[4] = current_time_ms (current timestamp in milliseconds)
 -- ARGV[5] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
@@ -43,6 +43,14 @@ end
 -- Add tokens to bucket, but don't exceed max capacity
 local new_tokens = math.min(max_tokens, current_tokens + tokens_to_add)
 
+-- Advance the refill timestamp only when tokens actually accrued.
+-- Resetting it on every denied check floors away fractional progress,
+-- so low rates (e.g. 1/hour) would never accumulate while clients poll.
+local effective_refill_ms = current_time_ms
+if tokens_to_add <= 0 then
+    effective_refill_ms = last_refill_ms
+end
+
 -- Determine if request is allowed
 local allowed = 0
 local remaining = 0
@@ -55,7 +63,7 @@ if new_tokens >= cost then
     remaining = new_tokens
 
     -- Update bucket state with millisecond timestamp
-    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', current_time_ms)
+    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', effective_refill_ms)
 
     -- Set expiry to prevent memory leaks
     -- Use window_seconds * 2 as a safe TTL (bucket expires after inactivity)
@@ -78,7 +86,7 @@ else
     end
 
     -- Update bucket state with refilled tokens (even though request denied)
-    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', current_time_ms)
+    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', effective_refill_ms)
 
     -- Set expiry
     local ttl = window_seconds * 2 + 60

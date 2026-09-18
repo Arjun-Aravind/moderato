@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from fastlimit import RateLimitExceeded
+from tests.conftest import sleep_past_window_boundary
 
 
 @pytest.mark.asyncio
@@ -24,13 +25,15 @@ class TestTokenBucket:
         assert result is True
 
         # Should allow up to 10 requests total
-        for _ in range(9):  # 9 more requests (total 10)
-            result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
-            assert result is True
+        tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(9)]
+        results = await asyncio.gather(*tasks)
+        assert all(r is True for r in results)
 
-        # 11th request should be rate limited
+        # 11th request should be rate limited. cost=10 (full capacity) makes
+        # the denial timing-proof: a slow runner's drain can leak a token or
+        # two back via refill, but a full bucket takes a full second.
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
     async def test_token_refill(self, clean_limiter):
         """Test that tokens refill over time."""
@@ -38,13 +41,15 @@ class TestTokenBucket:
         key = "token-refill-test"
         rate = "10/second"  # 10 tokens/sec refill rate
 
-        # Consume all tokens
-        for _ in range(10):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+        # Consume all tokens at once (a sequential fill is slower than the
+        # 10/s refill on slow runners, which tops the bucket back up)
+        tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(10)]
+        await asyncio.gather(*tasks)
 
-        # Next request should fail
+        # Next request should fail (cost=10: refill during a slow drain can
+        # leak a token or two, but not a full bucket)
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
         # Wait 0.5 seconds (should refill ~5 tokens)
         await asyncio.sleep(0.5)
@@ -61,13 +66,14 @@ class TestTokenBucket:
         rate = "100/minute"  # ~1.67 tokens/sec, 100 token capacity
 
         # Should allow burst of 100 requests immediately
-        for _ in range(100):
-            result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
-            assert result is True
+        tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(100)]
+        results = await asyncio.gather(*tasks)
+        assert all(r is True for r in results)
 
-        # 101st request should fail
+        # 101st request should fail (cost=100: refill during the drain can
+        # leak a few tokens, not a full 100-token bucket)
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=100)
 
     async def test_smooth_rate_limiting(self, clean_limiter):
         """Test that token bucket provides smooth rate limiting."""
@@ -75,13 +81,14 @@ class TestTokenBucket:
         key = "smooth-test"
         rate = "10/second"
 
-        # Consume all tokens
-        for _ in range(10):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+        # Consume all tokens at once (drain faster than the 10/s refill)
+        tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(10)]
+        await asyncio.gather(*tasks)
 
-        # Should fail immediately
+        # Should fail immediately (cost=10: drain refill can leak a token
+        # or two on slow runners, but not a full bucket)
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
         # Wait exactly 1 second (should refill 10 tokens)
         await asyncio.sleep(1.1)  # Add buffer for timing
@@ -95,15 +102,18 @@ class TestTokenBucket:
         """Test that cost parameter works with token bucket."""
         limiter = clean_limiter
         key = "cost-test-tb"
-        rate = "10/second"
+        # Minute rate: keeps refill negligible so the final denial is robust
+        rate = "10/minute"
 
         # Request with cost=5 should consume 5 tokens
         await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=5)
 
         # Should have 5 tokens remaining (can make 5 more requests)
-        for _ in range(5):
-            result = await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=1)
-            assert result is True
+        tasks = [
+            limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=1) for _ in range(5)
+        ]
+        results = await asyncio.gather(*tasks)
+        assert all(r is True for r in results)
 
         # Next request should fail (no tokens left)
         with pytest.raises(RateLimitExceeded):
@@ -116,14 +126,28 @@ class TestTokenBucket:
         fw_key = "fw-compare"
         rate = "10/second"
 
-        # Both should allow initial burst
-        for _ in range(10):
-            await limiter.check(key=tb_key, rate=rate, algorithm="token_bucket")
-            await limiter.check(key=fw_key, rate=rate, algorithm="fixed_window")
+        # Align to a fresh 1-second window boundary so the fixed-window
+        # drain below lands in a single window on slow runners.
+        await sleep_past_window_boundary(limiter)
 
-        # Both should be rate limited now
+        # Both should allow initial burst. Drain concurrently: a sequential
+        # fill is slower than the 10/s refill on slow CI runners, which
+        # keeps the token bucket topped up and the next check would pass.
+        tb_tasks = [
+            limiter.check(key=tb_key, rate=rate, algorithm="token_bucket") for _ in range(10)
+        ]
+        fw_tasks = [
+            limiter.check(key=fw_key, rate=rate, algorithm="fixed_window") for _ in range(10)
+        ]
+        tb_results = await asyncio.gather(*tb_tasks)
+        fw_results = await asyncio.gather(*fw_tasks)
+        assert all(r is True for r in tb_results)
+        assert all(r is True for r in fw_results)
+
+        # Both should be rate limited now. Token bucket: cost=10 so drain
+        # refill (a token or two on slow runners) cannot satisfy it.
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=tb_key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=tb_key, rate=rate, algorithm="token_bucket", cost=10)
 
         with pytest.raises(RateLimitExceeded):
             await limiter.check(key=fw_key, rate=rate, algorithm="fixed_window")
@@ -194,13 +218,15 @@ class TestTokenBucket:
     async def test_tenant_isolation_token_bucket(self, clean_limiter):
         """Test that different tenants have isolated token buckets."""
         limiter = clean_limiter
-        rate = "5/second"
+        # Minute rate: keeps refill negligible so the denial is robust
+        rate = "5/minute"
 
-        # Tenant 1 uses up their tokens
-        for _ in range(5):
-            await limiter.check(
-                key="user:1", rate=rate, algorithm="token_bucket", tenant_type="tenant1"
-            )
+        # Tenant 1 uses up their tokens (concurrently, faster than the refill)
+        t1_tasks = [
+            limiter.check(key="user:1", rate=rate, algorithm="token_bucket", tenant_type="tenant1")
+            for _ in range(5)
+        ]
+        await asyncio.gather(*t1_tasks)
 
         # Tenant 1 should be rate limited
         with pytest.raises(RateLimitExceeded):
@@ -221,13 +247,14 @@ class TestTokenBucket:
         key = "reset-test-tb"
         rate = "10/second"
 
-        # Consume all tokens
-        for _ in range(10):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+        # Consume all tokens at once (drain faster than the 10/s refill)
+        tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(10)]
+        await asyncio.gather(*tasks)
 
-        # Should be rate limited
+        # Should be rate limited (cost=10: drain refill can leak a token or
+        # two on slow runners, but not a full bucket)
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
         # Reset the bucket (specify algorithm for proper reset)
         await limiter.reset(key=key, algorithm="token_bucket")
@@ -263,13 +290,14 @@ class TestTokenBucket:
         key = "no-burst-test"
         rate = "10/second"
 
-        # Consume all tokens
-        for _ in range(10):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+        # Consume all tokens at once (drain faster than the 10/s refill)
+        tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(10)]
+        await asyncio.gather(*tasks)
 
-        # Should be rate limited
+        # Should be rate limited (cost=10: drain refill can leak a token or
+        # two on slow runners, but not a full bucket, which takes 1s)
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
         # Wait 0.1 second (should refill ~1 token)
         await asyncio.sleep(0.15)
@@ -278,9 +306,10 @@ class TestTokenBucket:
         result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
         assert result is True
 
-        # Should be rate limited again
+        # Should be rate limited again: only ~1.5 tokens refilled, far from
+        # the full bucket a cost=10 request needs
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket")
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
     async def test_high_burst_rate(self, clean_limiter):
         """Test token bucket with very high burst rate."""

@@ -19,7 +19,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from fastlimit import RateLimiter  # noqa: E402
 
 # Configure logging for tests
-logging.basicConfig(level=logging.DEBUG)
+# WARNING (not DEBUG): debug logging of every Redis check slows high-concurrency
+# tests enough to straddle rate-limit windows and makes failures unreadable.
+logging.basicConfig(level=logging.WARNING)
 
 
 @pytest.fixture(scope="session")
@@ -317,3 +319,16 @@ def redis_time_mock():
             self.current_us = microseconds
 
     return RedisTimeMock()
+
+
+async def sleep_past_window_boundary(limiter, buffer: float = 0.05) -> None:
+    """Sleep until just after the next 1-second window boundary.
+
+    Slow CI runners can otherwise land sequential requests in two different
+    windows, breaking exact-fill assertions. Redis TIME is used so the
+    alignment matches the limiter's own clock.
+    """
+    import asyncio
+
+    _, microseconds = await limiter.backend.get_redis_time()
+    await asyncio.sleep(1.0 - (microseconds / 1_000_000) + buffer)

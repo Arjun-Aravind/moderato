@@ -5,18 +5,18 @@ This example shows how to implement SaaS-style tiered rate limiting
 with different limits for different customer tiers.
 """
 
-from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import JSONResponse
-from typing import Optional
-import uvicorn
-from datetime import datetime
 import os
-
 import sys
+from datetime import datetime
 from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter, RateLimitExceeded
+from fastlimit import RateLimiter, RateLimitExceeded  # noqa: E402
 
 app = FastAPI(
     title="Multi-Tenant API",
@@ -64,7 +64,7 @@ def get_tenant_info(api_key: str) -> tuple:
     tenant_id = API_KEY_MAP.get(api_key)
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    
+
     tenant = TENANT_DATABASE[tenant_id]
     return tenant_id, tenant["tier"], tenant["name"]
 
@@ -73,7 +73,7 @@ def get_tenant_info(api_key: str) -> tuple:
 async def startup_event():
     """Initialize rate limiter on startup."""
     await limiter.connect()
-    print(f"Connected to Redis")
+    print("Connected to Redis")
     print(f"Loaded {len(TENANT_DATABASE)} tenants")
 
 
@@ -127,16 +127,12 @@ async def get_data(request: Request, x_api_key: str = Header(None)):
     """Get data endpoint with tier-based rate limiting."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required")
-    
+
     tenant_id, tier, tenant_name = get_tenant_info(x_api_key)
     limit = TIER_LIMITS[tier]["data"]
-    
-    await limiter.check(
-        key=tenant_id,
-        rate=limit,
-        tenant_type=tier
-    )
-    
+
+    await limiter.check(key=tenant_id, rate=limit, tenant_type=tier)
+
     return {
         "tenant": tenant_name,
         "tier": tier,
@@ -155,16 +151,12 @@ async def get_analytics(request: Request, x_api_key: str = Header(None)):
     """Analytics endpoint with tier-based rate limiting."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required")
-    
+
     tenant_id, tier, tenant_name = get_tenant_info(x_api_key)
     limit = TIER_LIMITS[tier]["analytics"]
-    
-    await limiter.check(
-        key=tenant_id,
-        rate=limit,
-        tenant_type=f"{tier}:analytics"
-    )
-    
+
+    await limiter.check(key=tenant_id, rate=limit, tenant_type=f"{tier}:analytics")
+
     if tier == "enterprise":
         analytics_data = {
             "detailed_metrics": True,
@@ -186,7 +178,7 @@ async def get_analytics(request: Request, x_api_key: str = Header(None)):
             "historical_data": "7 days",
             "custom_reports": False,
         }
-    
+
     return {
         "tenant": tenant_name,
         "tier": tier,
@@ -201,16 +193,12 @@ async def export_data(request: Request, x_api_key: str = Header(None)):
     """Export endpoint with strict tier-based rate limiting."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required")
-    
+
     tenant_id, tier, tenant_name = get_tenant_info(x_api_key)
     limit = TIER_LIMITS[tier]["export"]
-    
-    await limiter.check(
-        key=tenant_id,
-        rate=limit,
-        tenant_type=f"{tier}:export"
-    )
-    
+
+    await limiter.check(key=tenant_id, rate=limit, tenant_type=f"{tier}:export")
+
     return {
         "tenant": tenant_name,
         "tier": tier,
@@ -227,11 +215,11 @@ async def check_usage(x_api_key: str = Header(None)):
     """Check current rate limit usage for the tenant."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required")
-    
+
     tenant_id, tier, tenant_name = get_tenant_info(x_api_key)
-    
+
     usage_data = {}
-    
+
     for endpoint, limit in TIER_LIMITS[tier].items():
         if endpoint == "export":
             tenant_type = f"{tier}:export"
@@ -239,27 +227,23 @@ async def check_usage(x_api_key: str = Header(None)):
             tenant_type = f"{tier}:analytics"
         else:
             tenant_type = tier
-        
+
         try:
-            usage = await limiter.get_usage(
-                key=tenant_id,
-                rate=limit,
-                tenant_type=tenant_type
-            )
+            usage = await limiter.get_usage(key=tenant_id, rate=limit, tenant_type=tenant_type)
             usage_data[endpoint] = {
                 "current": usage["current"],
                 "limit": usage["limit"],
                 "remaining": usage["remaining"],
                 "resets_in": usage["ttl"],
             }
-        except:
+        except Exception:
             usage_data[endpoint] = {
                 "current": 0,
                 "limit": int(limit.split("/")[0]),
                 "remaining": int(limit.split("/")[0]),
                 "resets_in": 0,
             }
-    
+
     return {
         "tenant": tenant_name,
         "tier": tier,
@@ -270,26 +254,24 @@ async def check_usage(x_api_key: str = Header(None)):
 
 @app.post("/api/upgrade")
 async def upgrade_tier(
-    new_tier: str,
-    x_api_key: str = Header(None),
-    x_admin_key: str = Header(None)
+    new_tier: str, x_api_key: str = Header(None), x_admin_key: str = Header(None)
 ):
     """Simulate tier upgrade (admin only)."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required")
-    
+
     if x_admin_key != "admin-secret":
         raise HTTPException(status_code=403, detail="Admin key required")
-    
+
     if new_tier not in TIER_LIMITS:
         raise HTTPException(status_code=400, detail="Invalid tier")
-    
+
     tenant_id, current_tier, tenant_name = get_tenant_info(x_api_key)
-    
+
     TENANT_DATABASE[tenant_id]["tier"] = new_tier
-    
+
     await limiter.reset(key=tenant_id)
-    
+
     return {
         "tenant": tenant_name,
         "previous_tier": current_tier,
@@ -305,7 +287,7 @@ async def list_tenants(x_admin_key: str = Header(None)):
     """List all tenants (admin only)."""
     if x_admin_key != "admin-secret":
         raise HTTPException(status_code=403, detail="Admin key required")
-    
+
     return {
         "tenants": [
             {

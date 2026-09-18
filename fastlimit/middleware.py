@@ -19,7 +19,7 @@ from .exceptions import RateLimitExceeded
 logger = logging.getLogger(__name__)
 
 
-class RateLimitHeadersMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
     """
     Middleware to automatically add rate limit headers to responses.
 

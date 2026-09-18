@@ -2,11 +2,12 @@
 Tests for multi-tenant rate limiting scenarios.
 """
 
-import pytest
 import asyncio
 from datetime import datetime
 
-from fastlimit import RateLimiter, RateLimitExceeded
+import pytest
+
+from fastlimit import RateLimitExceeded
 
 
 class TestMultiTenant:
@@ -28,19 +29,13 @@ class TestMultiTenant:
         for tenant_id, tenant_type in tenants:
             for i in range(5):
                 result = await limiter.check(
-                    key=tenant_id,
-                    rate="5/minute",
-                    tenant_type=tenant_type
+                    key=tenant_id, rate="5/minute", tenant_type=tenant_type
                 )
                 assert result is True, f"Failed for {tenant_id}/{tenant_type} request {i+1}"
 
             # Each should be at their limit
             with pytest.raises(RateLimitExceeded) as exc_info:
-                await limiter.check(
-                    key=tenant_id,
-                    rate="5/minute",
-                    tenant_type=tenant_type
-                )
+                await limiter.check(key=tenant_id, rate="5/minute", tenant_type=tenant_type)
             assert exc_info.value.remaining == 0
 
     @pytest.mark.asyncio
@@ -59,33 +54,18 @@ class TestMultiTenant:
 
         # Test each tier
         for tier, limit in tier_limits.items():
-            # Extract expected count from limit
-            expected_count = int(limit.split("/")[0])
-
             # Make requests up to 10 (free tier limit)
-            for i in range(10):
-                result = await limiter.check(
-                    key=tenant_id,
-                    rate=limit,
-                    tenant_type=tier
-                )
+            for _ in range(10):
+                result = await limiter.check(key=tenant_id, rate=limit, tenant_type=tier)
                 assert result is True
 
             # Free tier should be exhausted, others should continue
             if tier == "free":
                 with pytest.raises(RateLimitExceeded):
-                    await limiter.check(
-                        key=tenant_id,
-                        rate=limit,
-                        tenant_type=tier
-                    )
+                    await limiter.check(key=tenant_id, rate=limit, tenant_type=tier)
             else:
                 # Premium and Enterprise can continue
-                result = await limiter.check(
-                    key=tenant_id,
-                    rate=limit,
-                    tenant_type=tier
-                )
+                result = await limiter.check(key=tenant_id, rate=limit, tenant_type=tier)
                 assert result is True
 
     @pytest.mark.asyncio
@@ -97,37 +77,21 @@ class TestMultiTenant:
         # Start as free tier
         free_limit = "5/minute"
         for _ in range(5):
-            await limiter.check(
-                key=tenant_id,
-                rate=free_limit,
-                tenant_type="free"
-            )
+            await limiter.check(key=tenant_id, rate=free_limit, tenant_type="free")
 
         # Free tier exhausted
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(
-                key=tenant_id,
-                rate=free_limit,
-                tenant_type="free"
-            )
+            await limiter.check(key=tenant_id, rate=free_limit, tenant_type="free")
 
         # "Upgrade" to premium - should have separate limit
         premium_limit = "100/minute"
         for _ in range(10):
-            result = await limiter.check(
-                key=tenant_id,
-                rate=premium_limit,
-                tenant_type="premium"
-            )
+            result = await limiter.check(key=tenant_id, rate=premium_limit, tenant_type="premium")
             assert result is True
 
         # Free tier should still be exhausted
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(
-                key=tenant_id,
-                rate=free_limit,
-                tenant_type="free"
-            )
+            await limiter.check(key=tenant_id, rate=free_limit, tenant_type="free")
 
     @pytest.mark.asyncio
     async def test_api_key_based_tenant(self, clean_limiter, make_request):
@@ -145,15 +109,13 @@ class TestMultiTenant:
         @limiter.limit(
             "10/minute",
             key=lambda req: req.headers.get("X-API-Key"),
-            tenant_type=lambda req: api_key_tiers.get(
-                req.headers.get("X-API-Key"), "free"
-            )
+            tenant_type=lambda req: api_key_tiers.get(req.headers.get("X-API-Key"), "free"),
         )
         async def api_endpoint(request):
             return {"key": request.headers.get("X-API-Key")}
 
         # Test each API key
-        for api_key, tier in api_key_tiers.items():
+        for api_key, tier in api_key_tiers.items():  # noqa: B007
             request = make_request(headers={"X-API-Key": api_key})
 
             # Make 10 requests (the base limit)
@@ -175,11 +137,7 @@ class TestMultiTenant:
             results = []
             for _ in range(count):
                 try:
-                    result = await limiter.check(
-                        key=tenant_id,
-                        rate="50/second",
-                        tenant_type=tenant_type
-                    )
+                    await limiter.check(key=tenant_id, rate="50/minute", tenant_type=tenant_type)
                     results.append(True)
                 except RateLimitExceeded:
                     results.append(False)
@@ -215,9 +173,7 @@ class TestMultiTenant:
         for tenant in tenants:
             # Each tenant should have independent windows
             result = await limiter.check(
-                key=f"{tenant}-{base_time}",
-                rate="1/second",
-                tenant_type="standard"
+                key=f"{tenant}-{base_time}", rate="1/second", tenant_type="standard"
             )
             assert result is True
 
@@ -227,9 +183,7 @@ class TestMultiTenant:
         # All tenants should be able to make another request
         for tenant in tenants:
             result = await limiter.check(
-                key=f"{tenant}-{base_time}",
-                rate="1/second",
-                tenant_type="standard"
+                key=f"{tenant}-{base_time}", rate="1/second", tenant_type="standard"
             )
             assert result is True
 
@@ -241,15 +195,13 @@ class TestMultiTenant:
         @limiter.limit(
             "5/minute",
             key=lambda req: req.headers.get("X-Tenant-ID"),
-            tenant_type=lambda req: req.headers.get("X-Tenant-Type", "free")
+            tenant_type=lambda req: req.headers.get("X-Tenant-Type", "free"),
         )
         async def tenant_endpoint(request):
             return {"tenant": request.headers.get("X-Tenant-ID")}
 
         # Make requests for a tenant
-        request = make_request(
-            headers={"X-Tenant-ID": "test-tenant", "X-Tenant-Type": "premium"}
-        )
+        request = make_request(headers={"X-Tenant-ID": "test-tenant", "X-Tenant-Type": "premium"})
 
         # Use up the limit
         for _ in range(5):
@@ -279,18 +231,10 @@ class TestMultiTenant:
         for tenant_id, tenant_type, rate, request_count in tenants:
             # Make specific number of requests
             for _ in range(request_count):
-                await limiter.check(
-                    key=tenant_id,
-                    rate=rate,
-                    tenant_type=tenant_type
-                )
+                await limiter.check(key=tenant_id, rate=rate, tenant_type=tenant_type)
 
             # Check usage
-            usage = await limiter.get_usage(
-                key=tenant_id,
-                rate=rate,
-                tenant_type=tenant_type
-            )
+            usage = await limiter.get_usage(key=tenant_id, rate=rate, tenant_type=tenant_type)
 
             assert usage["current"] == request_count
             expected_limit = int(rate.split("/")[0])
@@ -306,38 +250,22 @@ class TestMultiTenant:
         # Use up limits for different tenant types
         for tenant_type in ["free", "premium"]:
             for _ in range(5):
-                await limiter.check(
-                    key=tenant_id,
-                    rate="5/minute",
-                    tenant_type=tenant_type
-                )
+                await limiter.check(key=tenant_id, rate="5/minute", tenant_type=tenant_type)
 
             # Should be limited
             with pytest.raises(RateLimitExceeded):
-                await limiter.check(
-                    key=tenant_id,
-                    rate="5/minute",
-                    tenant_type=tenant_type
-                )
+                await limiter.check(key=tenant_id, rate="5/minute", tenant_type=tenant_type)
 
         # Reset only the free tier
         await limiter.reset(key=tenant_id, tenant_type="free")
 
         # Free tier should work
-        result = await limiter.check(
-            key=tenant_id,
-            rate="5/minute",
-            tenant_type="free"
-        )
+        result = await limiter.check(key=tenant_id, rate="5/minute", tenant_type="free")
         assert result is True
 
         # Premium should still be limited
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(
-                key=tenant_id,
-                rate="5/minute",
-                tenant_type="premium"
-            )
+            await limiter.check(key=tenant_id, rate="5/minute", tenant_type="premium")
 
     @pytest.mark.asyncio
     async def test_wildcard_tenant_operations(self, clean_limiter):
@@ -348,11 +276,7 @@ class TestMultiTenant:
         # Create limits for multiple tenant types
         for tenant_type in ["free", "premium", "enterprise"]:
             for _ in range(3):
-                await limiter.check(
-                    key=tenant_id,
-                    rate="3/minute",
-                    tenant_type=tenant_type
-                )
+                await limiter.check(key=tenant_id, rate="3/minute", tenant_type=tenant_type)
 
         # Reset all (by not specifying tenant_type)
         result = await limiter.reset(key=tenant_id)
@@ -360,9 +284,5 @@ class TestMultiTenant:
 
         # All should work again
         for tenant_type in ["free", "premium", "enterprise"]:
-            result = await limiter.check(
-                key=tenant_id,
-                rate="3/minute",
-                tenant_type=tenant_type
-            )
+            result = await limiter.check(key=tenant_id, rate="3/minute", tenant_type=tenant_type)
             assert result is True

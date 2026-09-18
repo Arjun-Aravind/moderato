@@ -5,18 +5,19 @@ Run with:
     uvicorn examples.fastapi_app:app --reload --port 8000
 """
 
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-from datetime import datetime
 import os
-
 import sys
+from datetime import datetime
 from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastlimit import RateLimiter, RateLimitExceeded
+from fastlimit import RateLimiter, RateLimitExceeded  # noqa: E402
 
 app = FastAPI(
     title="FastLimit Demo API",
@@ -100,7 +101,7 @@ async def public_endpoint():
 async def limited_endpoint(request: Request):
     """
     Basic rate-limited endpoint.
-    
+
     Limit: 10 requests per minute per IP address.
     """
     return {
@@ -116,7 +117,7 @@ async def limited_endpoint(request: Request):
 async def strict_endpoint(request: Request):
     """
     Strictly rate-limited endpoint.
-    
+
     Limit: 3 requests per second per IP address.
     """
     return {
@@ -128,14 +129,11 @@ async def strict_endpoint(request: Request):
 
 
 @app.get("/api/user/{user_id}")
-@limiter.limit(
-    "100/hour",
-    key=lambda req: f"user:{req.path_params.get('user_id')}"
-)
+@limiter.limit("100/hour", key=lambda req: f"user:{req.path_params.get('user_id')}")
 async def user_endpoint(request: Request, user_id: str):
     """
     Per-user rate limiting.
-    
+
     Limit: 100 requests per hour per user ID.
     """
     return {
@@ -150,21 +148,21 @@ async def user_endpoint(request: Request, user_id: str):
 @limiter.limit(
     rate="50/minute",
     key=lambda req: req.headers.get("X-Tenant-ID", "default"),
-    tenant_type=lambda req: req.headers.get("X-Tenant-Tier", "free")
+    tenant_type=lambda req: req.headers.get("X-Tenant-Tier", "free"),
 )
 async def tenant_endpoint(request: Request):
     """
     Multi-tenant rate limiting.
-    
+
     Headers:
     - X-Tenant-ID: Tenant identifier
     - X-Tenant-Tier: Tenant tier (free/premium/enterprise)
-    
+
     Limit: 50 requests per minute per tenant.
     """
     tenant_id = request.headers.get("X-Tenant-ID", "default")
     tenant_tier = request.headers.get("X-Tenant-Tier", "free")
-    
+
     return {
         "message": "Multi-tenant endpoint",
         "tenant_id": tenant_id,
@@ -176,21 +174,20 @@ async def tenant_endpoint(request: Request):
 
 @app.post("/api/expensive")
 @limiter.limit(
-    rate="20/minute",
-    cost=lambda req: 5 if req.headers.get("X-Priority") == "high" else 1
+    rate="20/minute", cost=lambda req: 5 if req.headers.get("X-Priority") == "high" else 1
 )
 async def expensive_operation(request: Request):
     """
     Endpoint with variable cost based on priority.
-    
+
     Headers:
     - X-Priority: Request priority (high = 5x cost, normal = 1x cost)
-    
+
     Limit: 20 requests per minute (high priority counts as 5 requests).
     """
     priority = request.headers.get("X-Priority", "normal")
     cost = 5 if priority == "high" else 1
-    
+
     return {
         "message": "Expensive operation completed",
         "priority": priority,
@@ -205,7 +202,7 @@ async def expensive_operation(request: Request):
 async def status_endpoint():
     """Check API and rate limiter status."""
     health = await limiter.health_check()
-    
+
     return {
         "api_status": "healthy",
         "rate_limiter_status": "healthy" if health else "unhealthy",
@@ -218,11 +215,8 @@ async def status_endpoint():
 async def usage_endpoint(user_id: str):
     """Check rate limit usage for a specific user."""
     try:
-        usage = await limiter.get_usage(
-            key=f"user:{user_id}",
-            rate="100/hour"
-        )
-        
+        usage = await limiter.get_usage(key=f"user:{user_id}", rate="100/hour")
+
         return {
             "user_id": user_id,
             "current_requests": usage["current"],
@@ -248,9 +242,9 @@ async def reset_endpoint(user_id: str, request: Request):
     admin_key = request.headers.get("X-Admin-Key")
     if admin_key != "secret-admin-key":
         raise HTTPException(status_code=403, detail="Unauthorized")
-    
+
     result = await limiter.reset(key=f"user:{user_id}")
-    
+
     return {
         "message": f"Rate limit reset for user {user_id}",
         "success": result,

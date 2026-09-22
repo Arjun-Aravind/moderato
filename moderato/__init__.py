@@ -1,6 +1,6 @@
 """
-Moderato - Production-ready rate limiting library for Python
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Moderato - Async Redis-backed rate limiting for Python
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A high-performance, Redis-backed rate limiting library with async support.
 
@@ -43,7 +43,8 @@ except ModuleNotFoundError as exc:
 
 # Metrics are optional - only import if prometheus_client is available
 try:
-    from .metrics import RateLimitMetrics, init_metrics
+    from .metrics import RateLimitMetrics as RateLimitMetrics
+    from .metrics import init_metrics as init_metrics
 
     _METRICS_AVAILABLE = True
 except ModuleNotFoundError as exc:
@@ -52,8 +53,6 @@ except ModuleNotFoundError as exc:
     ):
         raise
     _METRICS_AVAILABLE = False
-    RateLimitMetrics = None  # type: ignore[misc, assignment]
-    init_metrics = None  # type: ignore[assignment]
 
 __version__ = "0.3.0"
 __author__ = "Arjun Aravind"

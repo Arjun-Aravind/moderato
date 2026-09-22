@@ -22,11 +22,15 @@ local max_tokens = tonumber(ARGV[1])
 local refill_rate_per_second = tonumber(ARGV[2])
 local window_seconds = tonumber(ARGV[3])
 local current_time_ms = tonumber(ARGV[4])
-local cost = tonumber(ARGV[5]) or 1000  -- Default to 1000 (cost=1) if not provided
+local cost_arg = ARGV[5]
+local cost = 1000
+if cost_arg then
+    cost = tonumber(cost_arg)
+end
 
--- Defense in depth: a negative cost would restore capacity
-if cost < 0 then
-    return redis.error_reply("cost must be non-negative")
+-- Defense in depth: request cost must consume capacity
+if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
+    return redis.error_reply("cost must be a positive integer")
 end
 
 -- Get current bucket state

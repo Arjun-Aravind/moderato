@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     services:
       redis:
@@ -126,6 +126,13 @@ jobs:
           import moderato
           assert moderato.RateLimiter is not None
           assert moderato.RateLimitHeadersMiddleware is None
+          assert not hasattr(moderato, 'RateLimitMetrics')
+          try:
+              moderato.RateLimiter(enable_metrics=True)
+          except moderato.RateLimitConfigError as exc:
+              assert 'moderato[metrics]' in str(exc)
+          else:
+              raise AssertionError('metrics must require the metrics extra')
           print('clean-env core import: OK')
           "
 
@@ -134,8 +141,14 @@ jobs:
           /tmp/smoke/bin/pip install -q "moderato[all] @ file://$(pwd)/$(ls dist/*.whl)" --force-reinstall
           /tmp/smoke/bin/python -c "
           import moderato
+          from prometheus_client import generate_latest
           assert moderato.RateLimitHeadersMiddleware is not None
           assert moderato.RateLimitMetrics is not None
+          first = moderato.RateLimiter(enable_metrics=True)
+          second = moderato.RateLimiter(enable_metrics=True)
+          assert first.metrics is second.metrics
+          first.metrics.record_check('fixed_window', True)
+          assert b'moderato_checks_total' in generate_latest()
           print('clean-env [all] import: OK')
           "
 

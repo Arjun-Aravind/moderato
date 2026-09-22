@@ -31,6 +31,7 @@ def create_limit_decorator(
     algorithm: Optional[str] = None,
     cost_func: Optional[CostFunc] = None,
     trust_proxy_headers: bool = False,
+    scope: Optional[str] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Create a rate limit decorator for async functions.
@@ -46,6 +47,8 @@ def create_limit_decorator(
         tenant_func: Optional function to extract tenant type from request
         algorithm: Algorithm to use for rate limiting
         cost_func: Optional function to calculate request cost
+        trust_proxy_headers: Whether to trust forwarded client IP headers
+        scope: Shared bucket name. Defaults to the request method and route.
 
     Returns:
         Decorator function
@@ -81,6 +84,7 @@ def create_limit_decorator(
                     tenant_func=tenant_func,
                     algorithm=algorithm,
                     cost_func=cost_func,
+                    scope=scope if scope is not None else _get_default_scope(request, func),
                     trust_proxy_headers=trust_proxy_headers,
                 )
 
@@ -105,6 +109,7 @@ def create_limit_decorator(
                     tenant_func=tenant_func,
                     algorithm=algorithm,
                     cost_func=cost_func,
+                    scope=scope if scope is not None else _get_default_scope(request, func),
                     trust_proxy_headers=trust_proxy_headers,
                 )
 
@@ -160,6 +165,7 @@ async def _check_rate_limit(
     tenant_func: Optional[TenantFunc],
     algorithm: Optional[str],
     cost_func: Optional[CostFunc],
+    scope: str,
     trust_proxy_headers: bool = False,
 ) -> None:
     """
@@ -212,6 +218,7 @@ async def _check_rate_limit(
             algorithm=algorithm,
             tenant_type=tenant_type,
             cost=cost,
+            scope=scope,
         )
 
         # Rate limit check passed - store usage info for headers (no extra Redis call)
@@ -239,6 +246,18 @@ async def _check_rate_limit(
 
         # Re-raise the exception
         raise
+
+
+def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
+    request_scope = getattr(request, "scope", {})
+    method = getattr(request, "method", None) or request_scope.get("method", "*")
+    route = request_scope.get("route")
+    route_path = getattr(route, "path", None)
+    if route_path:
+        return f"{method}:{route_path}"
+    module = getattr(func, "__module__", func.__class__.__module__)
+    name = getattr(func, "__qualname__", func.__class__.__qualname__)
+    return f"{method}:{module}.{name}"
 
 
 def _get_default_key(request: Any, trust_proxy_headers: bool = False) -> str:
@@ -371,6 +390,7 @@ class RateLimitMiddleware:
             await self.limiter.check(
                 key=_get_default_key(request, trust_proxy_headers=self.trust_proxy_headers),
                 rate=self.default_rate,
+                scope="middleware",
             )
         except RateLimitExceeded as e:
             # Send 429 response

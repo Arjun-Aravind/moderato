@@ -12,8 +12,21 @@ def _sample(name, labels):
     return REGISTRY.get_sample_value(name, labels) or 0
 
 
-def test_metrics_initialization_is_idempotent():
-    assert init_metrics() is init_metrics()
+def _unregister(metrics):
+    for collector in vars(metrics).values():
+        if hasattr(collector, "collect"):
+            REGISTRY.unregister(collector)
+    if metrics_module.get_metrics() is metrics:
+        metrics_module._global_metrics = None
+
+
+def test_metrics_initialization_is_idempotent(monkeypatch):
+    monkeypatch.setattr(metrics_module, "_global_metrics", None)
+    metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
+    try:
+        assert init_metrics(namespace=metrics.namespace) is metrics
+    finally:
+        _unregister(metrics)
 
 
 def test_limiter_reuses_initialized_namespace(monkeypatch):
@@ -23,9 +36,7 @@ def test_limiter_reuses_initialized_namespace(monkeypatch):
         limiter = RateLimiter(enable_metrics=True)
         assert limiter.metrics is metrics
     finally:
-        for collector in vars(metrics).values():
-            if hasattr(collector, "collect"):
-                REGISTRY.unregister(collector)
+        _unregister(metrics)
 
 
 @pytest.mark.asyncio

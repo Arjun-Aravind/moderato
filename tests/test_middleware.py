@@ -3,6 +3,7 @@ Tests for rate limit headers middleware.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 
 import pytest
 import redis as sync_redis
@@ -22,19 +23,18 @@ def app_with_middleware(redis_url):
     client.flushdb()
     client.close()
 
-    app = FastAPI()
     limiter = RateLimiter(redis_url=redis_url, key_prefix="test:middleware")
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await limiter.connect()
+        yield
+        await limiter.close()
+
+    app = FastAPI(lifespan=lifespan)
 
     # Add middleware
     app.add_middleware(RateLimitHeadersMiddleware)
-
-    @app.on_event("startup")
-    async def startup():
-        await limiter.connect()
-
-    @app.on_event("shutdown")
-    async def shutdown():
-        await limiter.close()
 
     @app.get("/limited")
     @limiter.limit("5/minute")
@@ -301,19 +301,18 @@ class TestRateLimitMiddleware:
 
         from moderato.decorators import RateLimitMiddleware
 
-        app = FastAPI()
         limiter = RateLimiter(
             redis_url=redis_url, key_prefix=f"test:asgi-middleware:{uuid.uuid4().hex[:8]}"
         )
-        app.add_middleware(RateLimitMiddleware, limiter=limiter, default_rate="5/minute")
 
-        @app.on_event("startup")
-        async def startup():
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
             await limiter.connect()
-
-        @app.on_event("shutdown")
-        async def shutdown():
+            yield
             await limiter.close()
+
+        app = FastAPI(lifespan=lifespan)
+        app.add_middleware(RateLimitMiddleware, limiter=limiter, default_rate="5/minute")
 
         @app.get("/anything")
         async def anything(request: Request):

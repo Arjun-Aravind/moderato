@@ -3,7 +3,7 @@ Tests for multi-tenant rate limiting scenarios.
 """
 
 import asyncio
-from datetime import datetime
+from uuid import uuid4
 
 import pytest
 
@@ -165,7 +165,7 @@ class TestMultiTenant:
     async def test_tenant_specific_windows(self, clean_limiter):
         """Test that time windows are tenant-specific."""
         limiter = clean_limiter
-        base_time = datetime.utcnow().isoformat()
+        run_id = uuid4().hex
 
         # Make requests for different tenants in same time window
         tenants = ["tenant-x", "tenant-y", "tenant-z"]
@@ -173,7 +173,7 @@ class TestMultiTenant:
         for tenant in tenants:
             # Each tenant should have independent windows
             result = await limiter.check(
-                key=f"{tenant}-{base_time}", rate="1/second", tenant_type="standard"
+                key=f"{tenant}-{run_id}", rate="1/second", tenant_type="standard"
             )
             assert result is True
 
@@ -183,7 +183,7 @@ class TestMultiTenant:
         # All tenants should be able to make another request
         for tenant in tenants:
             result = await limiter.check(
-                key=f"{tenant}-{base_time}", rate="1/second", tenant_type="standard"
+                key=f"{tenant}-{run_id}", rate="1/second", tenant_type="standard"
             )
             assert result is True
 

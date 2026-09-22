@@ -188,8 +188,9 @@ class TestFixedWindow:
         assert usage["current"] == 42
         assert usage["limit"] == 100
         assert usage["remaining"] == 58
-        assert usage["ttl"] > 0
-        assert usage["ttl"] <= 60
+        # TTL truncates to whole seconds, so a run landing in the final second
+        # of the window legitimately reports 0 while the bucket is still alive.
+        assert 0 <= usage["ttl"] <= 60
 
     @pytest.mark.asyncio
     async def test_reset_functionality(self, clean_limiter):

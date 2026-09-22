@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Required for PyPI Trusted Publishing (OIDC). No PYPI_TOKEN secret needed.
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -37,8 +39,10 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-          # Extract changelog section for this version
-          awk '/^## \['"$VERSION"'\]/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md > release_notes.md
+          # Extract changelog section for this version (matches both
+          # commitizen's "## v0.3.0 (date)" and Keep-a-Changelog's
+          # "## [0.3.0] - date" header formats)
+          awk '/^## \[?v?'"$VERSION"'\]?/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md > release_notes.md
 
           # If empty, use a default message
           if [ ! -s release_notes.md ]; then
@@ -54,8 +58,11 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
 
-      # Uncomment when ready to publish to PyPI
-      # - name: Publish to PyPI
-      #   env:
-      #     POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
-      #   run: poetry publish
+      - name: Publish to PyPI (Trusted Publishing)
+        # dc37677b2e1c63e2034f94d8a5b11f265b73ba33 = release/v1 (pinned for supply-chain hygiene)
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        with:
+          packages-dir: dist/
+          # PyPI versions are immutable; skip files already uploaded so a
+          # retried run (e.g. after fixing publisher setup) can complete.
+          skip-existing: true

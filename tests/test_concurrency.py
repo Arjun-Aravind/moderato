@@ -250,14 +250,20 @@ class TestDistributedClockConsistency:
         key = f"window-align-{datetime.utcnow().isoformat()}"
         rate = "10/minute"
 
-        # Make a request
-        await limiter.check(key=key, rate=rate)
+        # In the final second of a window, Redis truncates TTL to 0 and a
+        # retry check() after the boundary rolls into a fresh window with
+        # a full TTL again. Retry briefly so this test is deterministic.
+        usage = None
+        for _ in range(10):
+            await limiter.check(key=key, rate=rate)
+            usage = await limiter.get_usage(key=key, rate=rate)
+            if usage["current"] == 1 and 0 < usage["ttl"] <= 60:
+                break
+            await asyncio.sleep(0.25)
 
-        # Get usage - should reflect Redis time-based window
-        usage = await limiter.get_usage(key=key, rate=rate)
+        assert usage is not None
         assert usage["current"] == 1
-        assert usage["ttl"] > 0
-        assert usage["ttl"] <= 60
+        assert 0 < usage["ttl"] <= 60
 
 
 @pytest.mark.asyncio

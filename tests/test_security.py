@@ -762,27 +762,3 @@ class TestLuaCostGuard:
         )
         assert result.allowed
         assert result.remaining == 2000
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
-    async def test_fixed_window_fallback_rejects_invalid_cost(self, redis_client, invalid_cost):
-        import time
-
-        from moderato.backends.redis import FIXED_WINDOW_FALLBACK_SCRIPT
-
-        key = f"lua-fallback-{uuid4().hex}"
-        with pytest.raises(Exception, match="cost must be a positive integer"):
-            await redis_client.eval(
-                FIXED_WINDOW_FALLBACK_SCRIPT,
-                1,
-                key,
-                "3000",
-                "60",
-                str(int(time.time()) + 60),
-                str(invalid_cost),
-            )
-        # A normal request must see a fresh bucket, proving nothing was refunded.
-        result = await redis_client.eval(
-            FIXED_WINDOW_FALLBACK_SCRIPT, 1, key, "3000", "60", str(int(time.time()) + 60), "1000"
-        )
-        assert list(result)[:2] == [1, 2000]

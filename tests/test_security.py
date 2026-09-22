@@ -8,11 +8,11 @@ These tests validate:
 """
 
 
-from datetime import datetime
+from uuid import uuid4
 
 import pytest
 
-from moderato import RateLimitConfigError, RateLimiter, RateLimitExceeded
+from moderato import BackendError, RateLimitConfigError, RateLimiter, RateLimitExceeded
 from moderato.decorators import RateLimitMiddleware, _get_default_key
 from moderato.utils import generate_key
 
@@ -564,7 +564,7 @@ class TestPolicyIsolation:
         limiter = RateLimiter(redis_url=redis_url, key_prefix="policy-isolation")
         await limiter.connect()
         try:
-            key = f"iso-{datetime.utcnow().isoformat()}"
+            key = f"iso-{uuid4().hex}"
 
             async def try_check(**kwargs):
                 try:
@@ -596,7 +596,7 @@ class TestPolicyIsolation:
         limiter = RateLimiter(redis_url=redis_url, key_prefix="neg-cost")
         await limiter.connect()
         try:
-            key = f"neg-{datetime.utcnow().isoformat()}"
+            key = f"neg-{uuid4().hex}"
 
             async def try_check(**kwargs):
                 try:
@@ -622,9 +622,149 @@ class TestPolicyIsolation:
             await limiter.close()
 
     @pytest.mark.asyncio
-    async def test_zero_or_negative_rate_rejected(self):
-        """A rate limit of 0 requests must be a configuration error."""
+    async def test_reset_with_policy_shaped_tenant(self, redis_url):
+        """A tenant type literally named like a policy (p100x60) must still reset.
+
+        The suffix classifier decides whether the suffix starts with a tenant
+        from the scan shape, never from the tenant's text, so a tenant whose
+        name matches p{limit}x{window} cannot evade reset().
+        """
+        limiter = RateLimiter(redis_url=redis_url, key_prefix="policy-shaped-tenant")
+        await limiter.connect()
+        try:
+            key = f"shaped-{uuid4().hex}"
+
+            async def try_check(**kwargs):
+                try:
+                    return await limiter.check(**kwargs)
+                except RateLimitExceeded:
+                    return False
+
+            for algo in ["token_bucket", "fixed_window", "sliding_window"]:
+                accepted = 0
+                for _ in range(10):
+                    accepted += await try_check(
+                        key=key, rate="3/second", tenant_type="p100x60", algorithm=algo
+                    )
+                assert accepted == 3, f"{algo}: expected exactly 3 accepted"
+
+                assert await limiter.reset(
+                    key, tenant_type="p100x60", algorithm=algo
+                ), f"{algo}: reset must find the tenant's keys"
+
+                accepted_after = 0
+                for _ in range(10):
+                    accepted_after += await try_check(
+                        key=key, rate="3/second", tenant_type="p100x60", algorithm=algo
+                    )
+                assert accepted_after == 3, (
+                    f"{algo}: a full quota must be available again after reset "
+                    f"(accepted {accepted_after}/10)"
+                )
+        finally:
+            await limiter.close()
+
+    @pytest.mark.asyncio
+    async def test_zero_or_negative_rate_rejected(self, redis_url):
+        """A rate limit of 0 requests must be a configuration error.
+
+        Validation happens before any backend contact, so this must raise
+        RateLimitConfigError even though the limiter is never connected.
+        """
+        limiter = RateLimiter(redis_url=redis_url)
         with pytest.raises((ValueError, RateLimitConfigError)):
-            await RateLimiter(redis_url="redis://localhost:6379").check(
-                key="zero-rate", rate="0/minute"
+            await limiter.check(key="zero-rate", rate="0/minute")
+        await limiter.close()
+
+
+class TestLuaNegativeCostGuard:
+    """The Lua scripts themselves must reject negative costs.
+
+    ``RateLimiter.check`` rejects cost < 0 before any Lua runs; these tests
+    call the backend scripts directly (and the inline fixed-window fallback)
+    so the defense-in-depth guard cannot silently regress if the Python
+    validation is ever bypassed or falls out of sync.
+    """
+
+    @pytest.fixture
+    async def backend(self, redis_url):
+        from moderato.backends.redis import RedisBackend
+        from moderato.models import RateLimitConfig
+
+        b = RedisBackend(RateLimitConfig(redis_url=redis_url, key_prefix="lua-guard"))
+        await b.connect()
+        yield b
+        await b.close()
+
+    @staticmethod
+    def _future_ts(seconds: int) -> int:
+        import time
+
+        return int(time.time()) + seconds
+
+    @pytest.mark.asyncio
+    async def test_fixed_window_lua_rejects_negative_cost(self, backend):
+        """A negative cost must raise and leave the counter untouched."""
+        key = f"lua-fixed-{uuid4().hex}"
+        window_end = self._future_ts(60)
+        with pytest.raises(BackendError):
+            await backend.check_fixed_window(key, 3000, 60, window_end, cost=-1000)
+        # The counter must not have been created or decremented: a normal
+        # request right after must see a fresh bucket (1 used, 2 remaining).
+        result = await backend.check_fixed_window(key, 3000, 60, window_end, cost=1000)
+        assert result.allowed
+        assert result.remaining == 2000
+
+    @pytest.mark.asyncio
+    async def test_token_bucket_lua_rejects_negative_cost(self, backend):
+        """A negative cost must raise and leave the tokens untouched."""
+        key = f"lua-token-{uuid4().hex}"
+        with pytest.raises(BackendError):
+            await backend.check_token_bucket(
+                key, 5000, 10.0, 60, self._future_ts(60) * 1000, cost=-1000
             )
+        # Tokens must still be full after the rejected call.
+        result = await backend.check_token_bucket(
+            key, 5000, 10.0, 60, self._future_ts(60) * 1000, cost=1000
+        )
+        assert result.allowed
+        assert result.remaining == 4000
+
+    @pytest.mark.asyncio
+    async def test_sliding_window_lua_rejects_negative_cost(self, backend):
+        """A negative cost must raise and leave the window untouched."""
+        current_key = f"lua-slide-cur-{uuid4().hex}"
+        previous_key = f"lua-slide-prev-{uuid4().hex}"
+        now = self._future_ts(60)
+        with pytest.raises(BackendError):
+            await backend.check_sliding_window(current_key, previous_key, 3000, 60, now, cost=-1000)
+        # The window must still be empty after the rejected call.
+        result = await backend.check_sliding_window(
+            current_key, previous_key, 3000, 60, now, cost=1000
+        )
+        assert result.allowed
+        assert result.remaining == 2000
+
+    @pytest.mark.asyncio
+    async def test_fixed_window_fallback_script_rejects_negative_cost(self, redis_client):
+        """The inline fallback (used when the .lua file is missing) has the guard too."""
+        import time
+
+        from moderato.backends.redis import FIXED_WINDOW_FALLBACK_SCRIPT
+
+        key = f"lua-fallback-{uuid4().hex}"
+        with pytest.raises(Exception, match="cost must be non-negative"):
+            await redis_client.eval(
+                FIXED_WINDOW_FALLBACK_SCRIPT,
+                1,
+                key,
+                "3000",
+                "60",
+                str(int(time.time()) + 60),
+                "-1000",
+            )
+        # A normal request must see a fresh bucket, proving nothing was refunded.
+        result = await redis_client.eval(
+            FIXED_WINDOW_FALLBACK_SCRIPT, 1, key, "3000", "60", str(int(time.time()) + 60), "1000"
+        )
+        assert list(result)[:2] == [1, 2000]

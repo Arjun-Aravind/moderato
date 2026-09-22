@@ -33,7 +33,11 @@ try:
     from .middleware import RateLimitHeadersMiddleware
 
     _FRAMEWORK_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError as exc:
+    # Hide only a missing starlette; a defect inside middleware.py or its
+    # other dependencies must surface instead of being swallowed.
+    if exc.name is None or not (exc.name == "starlette" or exc.name.startswith("starlette.")):
+        raise
     _FRAMEWORK_AVAILABLE = False
     RateLimitHeadersMiddleware = None  # type: ignore[misc, assignment]
 
@@ -42,7 +46,11 @@ try:
     from .metrics import RateLimitMetrics, init_metrics
 
     _METRICS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError as exc:
+    if exc.name is None or not (
+        exc.name == "prometheus_client" or exc.name.startswith("prometheus_client.")
+    ):
+        raise
     _METRICS_AVAILABLE = False
     RateLimitMetrics = None  # type: ignore[misc, assignment]
     init_metrics = None  # type: ignore[assignment]

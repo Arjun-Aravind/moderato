@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING:** Renamed the package from `fastlimit` to `moderato` (`pip install moderato`, `import moderato`). The name `fastlimit` was already taken on PyPI by an unrelated package. In musical notation, moderato means "at a moderate pace" — the library enforces your API's tempo.
   - **Prometheus metric names change** with the default namespace: `fastlimit_checks_total` becomes `moderato_checks_total` (likewise for all other `fastlimit_*` metrics). Existing dashboards, alerts, and recording rules keyed on the old names will silently lose data. To keep the old metric names while you migrate dashboards, pass the namespace explicitly: `init_metrics(namespace="fastlimit")` or `RateLimitMetrics(namespace="fastlimit")`.
 - Corrected package author metadata to `Arjun Aravind <arjunaravind748@gmail.com>`.
+- **BREAKING:** `moderato.utils.generate_key()` now takes separate `policy` and `time_window` arguments (5 parameters total). This is required for the cross-policy isolation fix below: keys that omit the policy component would collide across different rate limits. Callers using `generate_key` directly must pass the policy (e.g. `p100x60`); `RateLimiter` users are unaffected.
+- The `moderato[fastapi]` extra now installs FastAPI itself (plus Starlette), matching the README's documented install path.
 
 ### Added
 

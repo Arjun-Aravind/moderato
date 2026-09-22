@@ -6,6 +6,12 @@ import hashlib
 import re
 from typing import Optional
 
+# Keys longer than this are replaced by a truncated prefix plus a SHA-256
+# digest (see hash_key). The preserved prefix leaves room for the 64-char
+# hex digest and a 1-char separator.
+HASH_KEY_MAX_LENGTH = 200
+HASH_KEY_PRESERVED_LEN = HASH_KEY_MAX_LENGTH - 64 - 1
+
 
 def parse_rate(rate_string: str) -> tuple[int, int]:
     """
@@ -68,6 +74,25 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
         raise ValueError(f"Invalid period: {period}")
 
     return requests, period_seconds[period]
+
+
+def scan_literal_may_miss_hashed_keys(scan_literal_len: int) -> bool:
+    """Whether a SCAN/MATCH pattern with this literal head can miss hashed keys.
+
+    ``hash_key`` replaces keys longer than ``HASH_KEY_MAX_LENGTH`` with their
+    first ``HASH_KEY_PRESERVED_LEN`` characters plus a SHA-256 digest. A
+    pattern only matches such a hashed key if the caller-controlled literal
+    part (everything before the wildcard) fits within the preserved prefix.
+
+    Args:
+        scan_literal_len: Length of the pattern's literal part, i.e. the
+            number of leading key characters that must survive hashing
+            (``prefix:identifier[:tenant]:`` including separators).
+
+    Returns:
+        True if keys hashed by ``hash_key`` may no longer match the pattern.
+    """
+    return scan_literal_len > HASH_KEY_PRESERVED_LEN
 
 
 def generate_key(
@@ -182,7 +207,7 @@ def get_time_window(window_seconds: int, timestamp: Optional[int] = None) -> str
     return str(window_start)
 
 
-def hash_key(key: str, max_length: int = 200) -> str:
+def hash_key(key: str, max_length: int = HASH_KEY_MAX_LENGTH) -> str:
     """
     Hash a key if it's too long for Redis.
 

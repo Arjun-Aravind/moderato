@@ -37,8 +37,8 @@ fastapi = {version = ">=0.100", optional = true}
 prometheus-client = {version = ">=0.19", optional = true}
 
 [tool.poetry.extras]
-# Starlette middleware: pip install 'moderato[fastapi]'
-fastapi = ["starlette"]
+# FastAPI + Starlette middleware: pip install 'moderato[fastapi]'
+fastapi = ["starlette", "fastapi"]
 # Prometheus metrics: pip install 'moderato[metrics]'
 metrics = ["prometheus-client"]
 all = ["starlette", "fastapi", "prometheus-client"]

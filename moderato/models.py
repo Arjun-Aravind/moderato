@@ -53,7 +53,7 @@ class RateLimitConfig(BaseModel):
     )
     enable_metrics: bool = Field(
         default=False,
-        description="Enable Prometheus metrics collection (future feature)",
+        description="Enable Prometheus metrics collection",
     )
     connection_timeout: int = Field(
         default=5,

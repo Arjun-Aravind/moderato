@@ -5,22 +5,24 @@ Main RateLimiter class implementation.
 import asyncio
 import logging
 import re
+import time
+from collections.abc import Awaitable
 from types import TracebackType
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 from .backends.redis import RedisBackend, _redact_redis_url
 from .exceptions import RateLimitConfigError, RateLimitExceeded
 from .models import CheckResult, RateLimitConfig
 from .utils import (
-    HASH_KEY_PRESERVED_LEN,
-    _url_encode_key_component,
     generate_key,
     get_time_window,
+    normalize_key_component,
     parse_rate,
-    scan_literal_may_miss_hashed_keys,
 )
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 def _escape_glob(value: str) -> str:
@@ -40,42 +42,24 @@ def _policy_component(requests: int, window_seconds: int) -> str:
 
 
 def _suffix_matches_algorithm(suffix: str, algorithm: str, has_tenant_prefix: bool = False) -> bool:
-    """Classify a rate limit key by the suffix after ``prefix:key``.
-
-    Parsing only the suffix keeps tenant names (even one literally called
-    "sliding" or shaped like a policy, e.g. ``p100x60``) from affecting
-    classification: whether the suffix starts with a tenant is decided by
-    the caller (which knows the scan shape), never inferred from the
-    tenant's text.
-
-    ``suffix`` may start at the tenant component (from ``_reset_all_tenants``,
-    which passes ``has_tenant_prefix=True``) or at the policy component
-    (from ``_reset_matching``).
-
-    Shapes (the policy component is ``p{limit}x{window}``):
-    - token bucket: "{tenant}:p100x60:bucket" or "p100x60:bucket"
-    - sliding window: "...:p100x60:sliding:{window_start}"
-    - fixed window: "...:p100x60:{window_start}"
-    """
+    """Classify a limiter key from the components after its identifier."""
     parts = suffix.split(":")
-    if has_tenant_prefix:
-        parts = parts[1:]  # the leading component is always the tenant
-    if len(parts) < 2:
-        return False
     policy_re = r"^p\d+x\d+$"
     if algorithm == "token_bucket":
         return (
-            len(parts) == 2 and re.match(policy_re, parts[0]) is not None and parts[1] == "bucket"
+            len(parts) >= 2 and re.match(policy_re, parts[-2]) is not None and parts[-1] == "bucket"
         )
     if algorithm == "sliding_window":
         return (
-            len(parts) == 3
-            and re.match(policy_re, parts[0]) is not None
-            and parts[1] == "sliding"
-            and parts[2].isdigit()
+            len(parts) >= 3
+            and re.match(policy_re, parts[-3]) is not None
+            and parts[-2] == "sliding"
+            and parts[-1].isdigit()
         )
     if algorithm == "fixed_window":
-        return len(parts) == 2 and re.match(policy_re, parts[0]) is not None and parts[1].isdigit()
+        return (
+            len(parts) >= 2 and re.match(policy_re, parts[-2]) is not None and parts[-1].isdigit()
+        )
     return True
 
 
@@ -128,7 +112,21 @@ class RateLimiter:
         )
         self.backend = RedisBackend(self.config)
         self._connected = False
-        self._lock = asyncio.Lock()  # For thread-safe connection
+        self._lock = asyncio.Lock()
+        self.metrics: Optional[Any] = None
+        if enable_metrics:
+            try:
+                from .metrics import init_metrics
+            except ModuleNotFoundError as exc:
+                if exc.name is None or not (
+                    exc.name == "prometheus_client" or exc.name.startswith("prometheus_client.")
+                ):
+                    raise
+                raise RateLimitConfigError(
+                    "Prometheus metrics require the 'metrics' extra: "
+                    "pip install 'moderato[metrics]'"
+                ) from exc
+            self.metrics = init_metrics()
 
         redacted_config = self.config.model_copy(
             update={"redis_url": _redact_redis_url(self.config.redis_url)}
@@ -176,6 +174,23 @@ class RateLimiter:
                 self._connected = False
                 logger.info("RateLimiter disconnected from Redis")
 
+    async def _run_backend_operation(self, operation: str, awaitable: Awaitable[T]) -> T:
+        if self.metrics is None:
+            return await awaitable
+
+        started = time.perf_counter()
+        try:
+            result = await awaitable
+        except Exception:
+            self.metrics.record_backend_operation(
+                operation, success=False, duration=time.perf_counter() - started
+            )
+            raise
+        self.metrics.record_backend_operation(
+            operation, success=True, duration=time.perf_counter() - started
+        )
+        return result
+
     async def check(
         self,
         key: str,
@@ -183,6 +198,7 @@ class RateLimiter:
         algorithm: Optional[str] = None,
         tenant_type: Optional[str] = None,
         cost: int = 1,
+        scope: str = "global",
     ) -> bool:
         """
         Check if a request is allowed under the rate limit.
@@ -197,6 +213,7 @@ class RateLimiter:
             algorithm: Algorithm to use (defaults to config.default_algorithm)
             tenant_type: Tenant type for multi-tenant setups (e.g., "free", "premium")
             cost: Cost of this request (default 1, can be higher for expensive operations)
+            scope: Namespace for independently limited resources (default "global")
 
         Returns:
             True if request is allowed
@@ -234,6 +251,7 @@ class RateLimiter:
             algorithm=algorithm,
             tenant_type=tenant_type,
             cost=cost,
+            scope=scope,
         )
         return result.allowed
 
@@ -244,6 +262,7 @@ class RateLimiter:
         algorithm: Optional[str] = None,
         tenant_type: Optional[str] = None,
         cost: int = 1,
+        scope: str = "global",
     ) -> CheckResult:
         """
         Check if a request is allowed and return detailed rate limit info.
@@ -259,20 +278,19 @@ class RateLimiter:
             algorithm: Algorithm to use (defaults to config.default_algorithm)
             tenant_type: Tenant type for multi-tenant setups (e.g., "free", "premium")
             cost: Cost of this request (default 1, can be higher for expensive operations)
+            scope: Namespace for independently limited resources (default "global")
 
         Returns:
-            CheckResult with allowed status and usage information
+            CheckResult with usage information when the request is allowed
 
         Raises:
+            RateLimitExceeded: If rate limit is exceeded
             RateLimitConfigError: If configuration is invalid
             BackendError: If backend operation fails
 
         Examples:
             >>> result = await limiter.check_with_info(key="user:123", rate="100/minute")
-            >>> if result.allowed:
-            ...     print(f"{result.remaining} requests remaining")
-            ... else:
-            ...     print(f"Rate limited, retry after {result.retry_after}s")
+            >>> print(f"{result.remaining} requests remaining")
         """
         # Validate the request configuration before touching the backend so
         # bad input raises RateLimitConfigError even without a Redis server.
@@ -281,14 +299,15 @@ class RateLimiter:
         except ValueError as e:
             raise RateLimitConfigError(f"Invalid rate format: {e}") from e
 
-        # A negative cost would *restore* capacity instead of consuming it
-        if cost < 0:
-            raise RateLimitConfigError(f"cost must be non-negative, got {cost}")
+        if not isinstance(cost, int) or isinstance(cost, bool) or cost < 1:
+            raise RateLimitConfigError("cost must be a positive integer")
 
         # Select algorithm
         algorithm = algorithm or self.config.default_algorithm
         if algorithm not in ["fixed_window", "token_bucket", "sliding_window"]:
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
+
+        check_started = time.perf_counter()
 
         # Ensure we're connected
         if not self._connected:
@@ -316,9 +335,13 @@ class RateLimiter:
                 tenant_type,
                 policy,
                 time_window,
+                scope=scope,
             )
-            result = await self.backend.check_fixed_window(
-                full_key, max_requests, window_seconds, window_end, cost_with_multiplier
+            result = await self._run_backend_operation(
+                "check_fixed_window",
+                self.backend.check_fixed_window(
+                    full_key, max_requests, window_seconds, window_end, cost_with_multiplier
+                ),
             )
         elif algorithm == "token_bucket":
             # Token bucket uses persistent key (no time window needed)
@@ -327,7 +350,8 @@ class RateLimiter:
                 key,
                 tenant_type,
                 policy,
-                "bucket",  # Static suffix instead of time window
+                "bucket",
+                scope=scope,
             )
             # Use milliseconds for precision with low rates (e.g., 1/hour)
             # refill_rate = max_requests / window_seconds (tokens per second).
@@ -335,13 +359,16 @@ class RateLimiter:
             # 1/hour (1000 // 3600 == 0) to a bucket that never refills.
             refill_rate_per_second = max_requests / window_seconds
             current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
-            result = await self.backend.check_token_bucket(
-                key=full_key,
-                max_tokens=max_requests,
-                refill_rate_per_second=refill_rate_per_second,
-                window_seconds=window_seconds,
-                current_time_ms=current_time_ms,
-                cost=cost_with_multiplier,
+            result = await self._run_backend_operation(
+                "check_token_bucket",
+                self.backend.check_token_bucket(
+                    key=full_key,
+                    max_tokens=max_requests,
+                    refill_rate_per_second=refill_rate_per_second,
+                    window_seconds=window_seconds,
+                    current_time_ms=current_time_ms,
+                    cost=cost_with_multiplier,
+                ),
             )
         elif algorithm == "sliding_window":
             # Sliding window needs base key (windows calculated in algorithm)
@@ -350,26 +377,37 @@ class RateLimiter:
                 key,
                 tenant_type,
                 policy,
-                "sliding",  # Base suffix for sliding window
+                "sliding",
+                scope=scope,
             )
             current_time = redis_time_seconds
             window_start = current_time - (current_time % window_seconds)
             previous_window_start = window_start - window_seconds
 
-            result = await self.backend.check_sliding_window(
-                current_key=f"{base_key}:{window_start}",
-                previous_key=f"{base_key}:{previous_window_start}",
-                max_requests=max_requests,
-                window_seconds=window_seconds,
-                current_time=current_time,
-                cost=cost_with_multiplier,
+            result = await self._run_backend_operation(
+                "check_sliding_window",
+                self.backend.check_sliding_window(
+                    current_key=f"{base_key}:{window_start}",
+                    previous_key=f"{base_key}:{previous_window_start}",
+                    max_requests=max_requests,
+                    window_seconds=window_seconds,
+                    current_time=current_time,
+                    cost=cost_with_multiplier,
+                ),
             )
         else:
             raise NotImplementedError(f"Algorithm {algorithm} not yet implemented")
 
-        # Convert from integer math (1000x multiplier)
         remaining_requests = result.remaining // 1000
-        retry_after_seconds = max(1, result.retry_after // 1000) if not result.allowed else 0
+        retry_after_seconds = (
+            max(1, (result.retry_after + 999) // 1000) if not result.allowed else 0
+        )
+
+        if self.metrics is not None:
+            self.metrics.observe_check_duration(algorithm, time.perf_counter() - check_started)
+            self.metrics.record_check(algorithm, result.allowed)
+            if not result.allowed:
+                self.metrics.record_limit_exceeded(algorithm, tenant_type)
 
         # Create CheckResult with all info
         check_result = CheckResult(
@@ -399,6 +437,7 @@ class RateLimiter:
         tenant_type: Optional[Callable[..., str]] = None,
         algorithm: Optional[str] = None,
         cost: Optional[Callable[..., int]] = None,
+        scope: Optional[str] = None,
         trust_proxy_headers: bool = False,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """
@@ -414,6 +453,7 @@ class RateLimiter:
             tenant_type: Optional function to extract tenant type from request
             algorithm: Algorithm to use (defaults to config.default_algorithm)
             cost: Optional function to calculate request cost
+            scope: Shared bucket name. By default, each route and method is isolated.
             trust_proxy_headers: If True, trust X-Forwarded-For headers for IP.
                                Only enable if behind a trusted reverse proxy.
 
@@ -451,6 +491,7 @@ class RateLimiter:
             tenant_func=tenant_type,
             algorithm=algorithm,
             cost_func=cost,
+            scope=scope,
             trust_proxy_headers=trust_proxy_headers,
         )
 
@@ -508,13 +549,8 @@ class RateLimiter:
     async def _reset_all_tenants(self, key: str, algorithm: Optional[str] = None) -> bool:
         """Reset rate limit keys for every tenant type of this key.
 
-        Scans for keys shaped ``{prefix}:{encoded_key}:*`` which covers all
-        tenant types, algorithms, and time windows in one pass. If an
-        ``algorithm`` is given, only keys for that algorithm are deleted.
-        Note: keys longer than 200 chars are SHA-hashed (see utils.hash_key).
-        A scan still matches those unless ``prefix:identifier:`` alone exceeds
-        the hash-preserved prefix; when that cannot be ruled out, a warning is
-        logged because the reset may silently leave buckets in place.
+        Scans for keys shaped ``{prefix}:{encoded_key}:*`` and optionally
+        filters the matches by algorithm.
         """
         if not self._connected:
             await self.connect()
@@ -527,16 +563,10 @@ class RateLimiter:
         ):
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
 
-        # URL-encoding already strips Redis glob metacharacters from the key,
-        # but the configured prefix is user input - escape it for MATCH.
-        encoded_key = _url_encode_key_component(key)
+        encoded_key = normalize_key_component(key)
         pattern = f"{_escape_glob(self.config.key_prefix)}:{encoded_key}:*"
-        # Everything after "{prefix}:{encoded_key}:" is "{tenant}:{suffix}"
-        # (+1 skips the separator colon before the tenant)
         suffix_offset = len(self.config.key_prefix) + 1 + len(encoded_key) + 1
-        self._warn_if_scan_may_miss_hashed_keys(suffix_offset, key)
 
-        # Stream keys and delete in batches so peak memory stays bounded
         check_algorithm = algorithm if algorithm not in (None, "all") else None
         return await self._delete_matching(
             pattern, suffix_offset, check_algorithm, has_tenant_prefix=True
@@ -550,28 +580,14 @@ class RateLimiter:
         one pass. If an ``algorithm`` is given, only keys for that algorithm
         are deleted.
         """
-        encoded_key = _url_encode_key_component(key)
-        encoded_tenant = _url_encode_key_component(tenant_type)
+        encoded_key = normalize_key_component(key)
+        encoded_tenant = normalize_key_component(tenant_type)
         pattern = f"{_escape_glob(self.config.key_prefix)}:{encoded_key}:{encoded_tenant}:*"
         # Everything after "{prefix}:{encoded_key}:{tenant}:" is the suffix
         suffix_offset = (
             len(self.config.key_prefix) + 1 + len(encoded_key) + 1 + len(encoded_tenant) + 1
         )
-        self._warn_if_scan_may_miss_hashed_keys(suffix_offset, key)
         return await self._delete_matching(pattern, suffix_offset, algorithm)
-
-    @staticmethod
-    def _warn_if_scan_may_miss_hashed_keys(scan_literal_len: int, key: str) -> None:
-        """Warn when a reset scan may silently skip SHA-hashed Redis keys."""
-        if scan_literal_may_miss_hashed_keys(scan_literal_len):
-            logger.warning(
-                "reset(%r): the prefix and key are long enough that their Redis "
-                "keys may be SHA-hashed (utils.hash_key keeps only the first %d "
-                "characters), and SCAN patterns cannot match hashed keys - this "
-                "reset may leave buckets in place. Use a shorter key_prefix or key.",
-                key,
-                HASH_KEY_PRESERVED_LEN,
-            )
 
     async def _delete_matching(
         self,
@@ -603,6 +619,7 @@ class RateLimiter:
         rate: str,
         algorithm: Optional[str] = None,
         tenant_type: Optional[str] = None,
+        scope: str = "global",
     ) -> dict[str, Any]:
         """
         Get current usage statistics for a key.
@@ -612,6 +629,7 @@ class RateLimiter:
             rate: Rate limit string to determine window
             algorithm: Algorithm used (defaults to config.default_algorithm)
             tenant_type: Tenant type (defaults to "default")
+            scope: Namespace used for the rate limit (defaults to "global")
 
         Returns:
             Dictionary with usage statistics. Format varies by algorithm:
@@ -641,21 +659,33 @@ class RateLimiter:
 
         if algorithm == "fixed_window":
             return await self._get_fixed_window_usage(
-                key, requests, window_seconds, tenant_type, redis_time_seconds
+                key, requests, window_seconds, tenant_type, redis_time_seconds, scope
             )
         elif algorithm == "token_bucket":
             return await self._get_token_bucket_usage(
-                key, requests, window_seconds, tenant_type, redis_time_seconds, redis_time_us
+                key,
+                requests,
+                window_seconds,
+                tenant_type,
+                redis_time_seconds,
+                redis_time_us,
+                scope,
             )
         elif algorithm == "sliding_window":
             return await self._get_sliding_window_usage(
-                key, requests, window_seconds, tenant_type, redis_time_seconds
+                key, requests, window_seconds, tenant_type, redis_time_seconds, scope
             )
         else:
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
 
     async def _get_fixed_window_usage(
-        self, key: str, requests: int, window_seconds: int, tenant_type: str, current_time: int
+        self,
+        key: str,
+        requests: int,
+        window_seconds: int,
+        tenant_type: str,
+        current_time: int,
+        scope: str,
     ) -> dict[str, Any]:
         """Get usage statistics for fixed window algorithm."""
         time_window = get_time_window(window_seconds, current_time)
@@ -665,6 +695,7 @@ class RateLimiter:
             tenant_type,
             _policy_component(requests, window_seconds),
             time_window,
+            scope=scope,
         )
 
         usage = await self.backend.get_usage(full_key)
@@ -689,6 +720,7 @@ class RateLimiter:
         tenant_type: str,
         redis_time_seconds: int,
         redis_time_us: int,
+        scope: str,
     ) -> dict[str, Any]:
         """Get usage statistics for token bucket algorithm."""
         full_key = generate_key(
@@ -697,6 +729,7 @@ class RateLimiter:
             tenant_type,
             _policy_component(max_requests, window_seconds),
             "bucket",
+            scope=scope,
         )
 
         usage = await self.backend.get_token_bucket_usage(full_key)
@@ -734,7 +767,13 @@ class RateLimiter:
         }
 
     async def _get_sliding_window_usage(
-        self, key: str, max_requests: int, window_seconds: int, tenant_type: str, current_time: int
+        self,
+        key: str,
+        max_requests: int,
+        window_seconds: int,
+        tenant_type: str,
+        current_time: int,
+        scope: str,
     ) -> dict[str, Any]:
         """Get usage statistics for sliding window algorithm."""
         base_key = generate_key(
@@ -743,6 +782,7 @@ class RateLimiter:
             tenant_type,
             _policy_component(max_requests, window_seconds),
             "sliding",
+            scope=scope,
         )
 
         # Calculate window boundaries

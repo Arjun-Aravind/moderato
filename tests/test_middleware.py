@@ -41,6 +41,11 @@ def app_with_middleware(redis_url):
     async def limited_endpoint(request: Request):
         return {"message": "success"}
 
+    @app.get("/limited-two")
+    @limiter.limit("5/minute")
+    async def second_limited_endpoint(request: Request):
+        return {"message": "second"}
+
     @app.get("/no-limit")
     async def no_limit_endpoint(request: Request):
         return {"message": "no limit"}
@@ -104,6 +109,13 @@ class TestRateLimitHeadersMiddleware:
                 assert response.status_code == 200
                 remaining = int(response.headers["X-RateLimit-Remaining"])
                 assert remaining == expected_remaining
+
+    def test_same_rate_routes_have_independent_buckets(self, app_with_middleware):
+        with TestClient(app_with_middleware) as client:
+            for _ in range(5):
+                assert client.get("/limited").status_code == 200
+            assert client.get("/limited").status_code == 429
+            assert client.get("/limited-two").status_code == 200
 
     def test_endpoint_without_rate_limit(self, app_with_middleware):
         """Test that endpoints without rate limits don't add headers."""

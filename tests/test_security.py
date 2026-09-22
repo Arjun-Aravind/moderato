@@ -676,15 +676,18 @@ class TestPolicyIsolation:
             await limiter.check(key="zero-rate", rate="0/minute")
         await limiter.close()
 
+    @pytest.mark.asyncio
+    async def test_long_identifier_can_be_reset(self, clean_limiter):
+        key = "user-" + "x" * 300
+        await clean_limiter.check(key=key, rate="5/minute")
+        assert (await clean_limiter.get_usage(key=key, rate="5/minute"))["current"] == 1
 
-class TestLuaNegativeCostGuard:
-    """The Lua scripts themselves must reject negative costs.
+        assert await clean_limiter.reset(key, tenant_type="default")
+        assert (await clean_limiter.get_usage(key=key, rate="5/minute"))["current"] == 0
 
-    ``RateLimiter.check`` rejects cost < 0 before any Lua runs; these tests
-    call the backend scripts directly (and the inline fixed-window fallback)
-    so the defense-in-depth guard cannot silently regress if the Python
-    validation is ever bypassed or falls out of sync.
-    """
+
+class TestLuaCostGuard:
+    """The Lua scripts reject non-positive costs when called directly."""
 
     @pytest.fixture
     async def backend(self, redis_url):
@@ -703,12 +706,12 @@ class TestLuaNegativeCostGuard:
         return int(time.time()) + seconds
 
     @pytest.mark.asyncio
-    async def test_fixed_window_lua_rejects_negative_cost(self, backend):
-        """A negative cost must raise and leave the counter untouched."""
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    async def test_fixed_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-fixed-{uuid4().hex}"
         window_end = self._future_ts(60)
         with pytest.raises(BackendError):
-            await backend.check_fixed_window(key, 3000, 60, window_end, cost=-1000)
+            await backend.check_fixed_window(key, 3000, 60, window_end, cost=invalid_cost)
         # The counter must not have been created or decremented: a normal
         # request right after must see a fresh bucket (1 used, 2 remaining).
         result = await backend.check_fixed_window(key, 3000, 60, window_end, cost=1000)
@@ -716,12 +719,12 @@ class TestLuaNegativeCostGuard:
         assert result.remaining == 2000
 
     @pytest.mark.asyncio
-    async def test_token_bucket_lua_rejects_negative_cost(self, backend):
-        """A negative cost must raise and leave the tokens untouched."""
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    async def test_token_bucket_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-token-{uuid4().hex}"
         with pytest.raises(BackendError):
             await backend.check_token_bucket(
-                key, 5000, 10.0, 60, self._future_ts(60) * 1000, cost=-1000
+                key, 5000, 10.0, 60, self._future_ts(60) * 1000, cost=invalid_cost
             )
         # Tokens must still be full after the rejected call.
         result = await backend.check_token_bucket(
@@ -731,13 +734,15 @@ class TestLuaNegativeCostGuard:
         assert result.remaining == 4000
 
     @pytest.mark.asyncio
-    async def test_sliding_window_lua_rejects_negative_cost(self, backend):
-        """A negative cost must raise and leave the window untouched."""
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    async def test_sliding_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
         current_key = f"lua-slide-cur-{uuid4().hex}"
         previous_key = f"lua-slide-prev-{uuid4().hex}"
         now = self._future_ts(60)
         with pytest.raises(BackendError):
-            await backend.check_sliding_window(current_key, previous_key, 3000, 60, now, cost=-1000)
+            await backend.check_sliding_window(
+                current_key, previous_key, 3000, 60, now, cost=invalid_cost
+            )
         # The window must still be empty after the rejected call.
         result = await backend.check_sliding_window(
             current_key, previous_key, 3000, 60, now, cost=1000
@@ -746,14 +751,14 @@ class TestLuaNegativeCostGuard:
         assert result.remaining == 2000
 
     @pytest.mark.asyncio
-    async def test_fixed_window_fallback_script_rejects_negative_cost(self, redis_client):
-        """The inline fallback (used when the .lua file is missing) has the guard too."""
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    async def test_fixed_window_fallback_rejects_invalid_cost(self, redis_client, invalid_cost):
         import time
 
         from moderato.backends.redis import FIXED_WINDOW_FALLBACK_SCRIPT
 
         key = f"lua-fallback-{uuid4().hex}"
-        with pytest.raises(Exception, match="cost must be non-negative"):
+        with pytest.raises(Exception, match="cost must be positive"):
             await redis_client.eval(
                 FIXED_WINDOW_FALLBACK_SCRIPT,
                 1,
@@ -761,7 +766,7 @@ class TestLuaNegativeCostGuard:
                 "3000",
                 "60",
                 str(int(time.time()) + 60),
-                "-1000",
+                str(invalid_cost),
             )
         # A normal request must see a fresh bucket, proving nothing was refunded.
         result = await redis_client.eval(

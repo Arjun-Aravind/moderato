@@ -638,6 +638,33 @@ class RedisBackend:
             logger.error(f"Failed to get usage for key {key}: {e}")
             raise BackendError(f"Failed to get usage statistics: {e}") from e
 
+    async def raw_ttl(self, key: str) -> int:
+        """Return the raw Redis TTL of a key, without masking sentinel values.
+
+        Unlike :meth:`get_usage`, which maps TTL -1 (no expiry) and -2
+        (missing key) to 0, this returns them unchanged so callers can
+        distinguish a live bucket in its final second from a missing
+        expiry or a missing key.
+
+        Args:
+            key: Rate limit key to check
+
+        Returns:
+            Raw Redis TTL: -2 if the key is missing, -1 if it has no
+            expiry, otherwise seconds until expiry.
+
+        Raises:
+            BackendError: If not connected or Redis operation fails
+        """
+        if not self._redis or not self._connected:
+            raise BackendError("Redis not connected. Call connect() first.")
+
+        try:
+            return int(await self._redis.ttl(key))
+        except RedisError as e:
+            logger.error(f"Failed to get TTL for key {key}: {e}")
+            raise BackendError(f"Failed to get TTL: {e}") from e
+
     async def get_redis_time(self) -> tuple[int, int]:
         """
         Get current time from Redis server.

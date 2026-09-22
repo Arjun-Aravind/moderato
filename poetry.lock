@@ -3690,10 +3690,10 @@ testing = ["coverage[toml]", "zope.event", "zope.testing"]
 
 [extras]
 all = ["fastapi", "prometheus-client", "starlette"]
-fastapi = ["starlette"]
+fastapi = ["fastapi", "starlette"]
 metrics = ["prometheus-client"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "7a5ab96553ba27aaa0cc13df73ea35578ded5771e15959e4ae5cb76df38ed3e9"
+content-hash = "95642d2ca9e5ee7c2a468afc38cbc1a09c26863e35654efb20cab758d08efcc8"

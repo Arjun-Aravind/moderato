@@ -20,23 +20,24 @@ def _unregister(metrics):
         metrics_module._global_metrics = None
 
 
-def test_metrics_initialization_is_idempotent(monkeypatch):
+@pytest.fixture(autouse=True)
+def isolate_metrics(monkeypatch):
     monkeypatch.setattr(metrics_module, "_global_metrics", None)
-    metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
-    try:
-        assert init_metrics(namespace=metrics.namespace) is metrics
-    finally:
+    yield
+    metrics = metrics_module.get_metrics()
+    if metrics is not None:
         _unregister(metrics)
 
 
-def test_limiter_reuses_initialized_namespace(monkeypatch):
-    monkeypatch.setattr(metrics_module, "_global_metrics", None)
+def test_metrics_initialization_is_idempotent():
     metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
-    try:
-        limiter = RateLimiter(enable_metrics=True)
-        assert limiter.metrics is metrics
-    finally:
-        _unregister(metrics)
+    assert init_metrics(namespace=metrics.namespace) is metrics
+
+
+def test_limiter_reuses_initialized_namespace():
+    metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
+    limiter = RateLimiter(enable_metrics=True)
+    assert limiter.metrics is metrics
 
 
 @pytest.mark.asyncio

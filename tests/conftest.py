@@ -332,3 +332,18 @@ async def sleep_past_window_boundary(limiter, buffer: float = 0.05) -> None:
 
     _, microseconds = await limiter.backend.get_redis_time()
     await asyncio.sleep(1.0 - (microseconds / 1_000_000) + buffer)
+
+
+async def raw_key_ttl(backend, key_pattern: str) -> int:
+    """Return the raw Redis TTL of the single key matching ``key_pattern``.
+
+    ``backend.get_usage`` maps Redis TTL -1 (no expiry) and -2 (missing key)
+    to 0, so usage-level assertions cannot catch a dropped EXPIREAT. This
+    asserts on the raw key instead, and on exactly one match so a pattern
+    typo can never make the check silently pass on the wrong key.
+    """
+    matches = [key async for key in backend.iter_keys(key_pattern)]
+    assert (
+        len(matches) == 1
+    ), f"expected exactly 1 key matching {key_pattern!r}, found {len(matches)}: {matches}"
+    return await backend._redis.ttl(matches[0])

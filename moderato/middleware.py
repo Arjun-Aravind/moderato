@@ -59,17 +59,9 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
     Decorated endpoints receive headers on successful and rate-limited responses.
     """
 
-    def __init__(self, app: ASGIApp, always_add_headers: bool = True) -> None:
-        """
-        Initialize the middleware.
-
-        Args:
-            app: The ASGI application
-            always_add_headers: If True, add headers to all responses.
-                               If False, only add headers when rate limit info is available.
-        """
+    def __init__(self, app: ASGIApp) -> None:
+        """Initialize the middleware."""
         super().__init__(app)
-        self.always_add_headers = always_add_headers
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """

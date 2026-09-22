@@ -370,7 +370,7 @@ poetry install --with benchmarks
 poetry run python benchmarks/performance.py --quick
 ```
 
-The suite reports throughput, latency percentiles, algorithm comparisons, concurrency behavior, and Redis memory use. Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
+The quick run reports throughput, latency percentiles, algorithm comparisons, and rate-limit accuracy. Run without `--quick` to include concurrent-client, Redis memory, and multi-tenant benchmarks. Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
 
 **Implemented optimizations:**
 - Cached Lua scripts with `EVALSHA` and `EVAL` fallback

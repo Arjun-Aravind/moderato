@@ -42,23 +42,28 @@ def _policy_component(requests: int, window_seconds: int) -> str:
 
 
 def _suffix_matches_algorithm(suffix: str, algorithm: str, has_tenant_prefix: bool = False) -> bool:
-    """Classify a limiter key from the components after its identifier."""
+    """Classify legacy and scoped limiter key suffixes."""
     parts = suffix.split(":")
+    prefix_length = 1 if has_tenant_prefix else 0
     policy_re = r"^p\d+x\d+$"
     if algorithm == "token_bucket":
         return (
-            len(parts) >= 2 and re.match(policy_re, parts[-2]) is not None and parts[-1] == "bucket"
+            len(parts) in (prefix_length + 2, prefix_length + 3)
+            and re.match(policy_re, parts[-2]) is not None
+            and parts[-1] == "bucket"
         )
     if algorithm == "sliding_window":
         return (
-            len(parts) >= 3
+            len(parts) in (prefix_length + 3, prefix_length + 4)
             and re.match(policy_re, parts[-3]) is not None
             and parts[-2] == "sliding"
             and parts[-1].isdigit()
         )
     if algorithm == "fixed_window":
         return (
-            len(parts) >= 2 and re.match(policy_re, parts[-2]) is not None and parts[-1].isdigit()
+            len(parts) in (prefix_length + 2, prefix_length + 3)
+            and re.match(policy_re, parts[-2]) is not None
+            and parts[-1].isdigit()
         )
     return True
 
@@ -437,8 +442,8 @@ class RateLimiter:
         tenant_type: Optional[Callable[..., str]] = None,
         algorithm: Optional[str] = None,
         cost: Optional[Callable[..., int]] = None,
-        scope: Optional[str] = None,
         trust_proxy_headers: bool = False,
+        scope: Optional[str] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """
         Create a decorator for rate limiting endpoints.
@@ -453,9 +458,9 @@ class RateLimiter:
             tenant_type: Optional function to extract tenant type from request
             algorithm: Algorithm to use (defaults to config.default_algorithm)
             cost: Optional function to calculate request cost
-            scope: Shared bucket name. By default, each route and method is isolated.
             trust_proxy_headers: If True, trust X-Forwarded-For headers for IP.
                                Only enable if behind a trusted reverse proxy.
+            scope: Shared bucket name. By default, each route and method is isolated.
 
         Returns:
             Decorator function for rate limiting

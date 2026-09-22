@@ -35,9 +35,9 @@ async def test_limiter_records_checks_and_backend_operations(redis_url):
     )
 
     try:
-        await limiter.check("client", "1/minute")
+        await limiter.check("client", "1/hour")
         with pytest.raises(RateLimitExceeded):
-            await limiter.check("client", "1/minute")
+            await limiter.check("client", "1/hour")
     finally:
         await limiter.close()
 

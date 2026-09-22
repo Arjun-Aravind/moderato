@@ -32,22 +32,26 @@ class TestDecorators:
             await my_endpoint(request)
 
     @pytest.mark.asyncio
-    async def test_routes_have_independent_default_scopes(self, clean_limiter, mock_request):
-        request = mock_request()
+    async def test_method_and_route_define_default_scope(self, clean_limiter, mock_request):
+        class Route:
+            path = "/items/{item_id}"
+
+        get_request = mock_request()
+        get_request.method = "GET"
+        get_request.scope = {"method": "GET", "route": Route()}
+        post_request = mock_request()
+        post_request.method = "POST"
+        post_request.scope = {"method": "POST", "route": Route()}
 
         @clean_limiter.limit("2/minute")
-        async def route_a(request):
-            return "a"
+        async def endpoint(request):
+            return request.method
 
-        @clean_limiter.limit("2/minute")
-        async def route_b(request):
-            return "b"
-
-        assert await route_a(request) == "a"
-        assert await route_a(request) == "a"
+        assert await endpoint(get_request) == "GET"
+        assert await endpoint(get_request) == "GET"
         with pytest.raises(RateLimitExceeded):
-            await route_a(request)
-        assert await route_b(request) == "b"
+            await endpoint(get_request)
+        assert await endpoint(post_request) == "POST"
 
     @pytest.mark.asyncio
     async def test_explicit_scope_shares_a_bucket(self, clean_limiter, mock_request):

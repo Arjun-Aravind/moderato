@@ -16,8 +16,8 @@ local window_end = tonumber(ARGV[3])
 local cost = tonumber(ARGV[4]) or 1000  -- Default to 1000 (cost=1) if not provided
 
 -- Defense in depth: request cost must consume capacity
-if cost <= 0 then
-    return redis.error_reply("cost must be positive")
+if cost <= 0 or cost ~= math.floor(cost) then
+    return redis.error_reply("cost must be a positive integer")
 end
 
 -- Increment counter atomically by cost

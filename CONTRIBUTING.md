@@ -88,7 +88,19 @@ cd moderato
 git remote add upstream https://github.com/Arjun-Aravind/moderato.git
 ```
 
-### 2. Create Virtual Environment
+### 2. Install Poetry
+
+Dependency management uses [Poetry](https://python-poetry.org/). Install it
+before continuing (pipx is recommended):
+
+```bash
+pipx install poetry==1.8.3
+# or: pip install poetry==1.8.3
+```
+
+The project pins Poetry 1.8.3 (its lock file format matches that version).
+
+### 3. Create Virtual Environment
 
 ```bash
 # Create virtual environment
@@ -101,20 +113,22 @@ source venv/bin/activate
 venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+### 4. Install Dependencies
 
 ```bash
-# Install development dependencies
-pip install -e ".[dev,test,metrics]"
+# Install all dependencies
+poetry install
 
 # This installs:
 # - moderato package in editable mode
-# - Development tools (black, ruff, mypy)
-# - Testing tools (pytest, pytest-asyncio, pytest-cov)
-# - Optional dependencies (prometheus-client)
+# - Core dependencies (redis, pydantic, typing-extensions)
+# - Optional integration packages (starlette, fastapi, prometheus-client)
+# - Development tools (black, ruff, mypy, pre-commit)
+# - Testing tools (pytest, pytest-asyncio, pytest-cov, pytest-timeout)
+# - Examples group (uvicorn, httpx) and benchmarks group (locust, matplotlib)
 ```
 
-### 4. Start Redis
+### 5. Start Redis
 
 **Option A: Local Redis**
 ```bash
@@ -134,7 +148,7 @@ docker run -d -p 6379:6379 redis:7-alpine
 docker-compose up -d
 ```
 
-### 5. Verify Setup
+### 6. Verify Setup
 
 ```bash
 # Run tests to verify everything works
@@ -190,10 +204,7 @@ moderato/
 │   ├── fastapi_advanced.py
 │   └── docker-compose.yml
 │
-├── docs/                      # Documentation
-│   ├── ALGORITHMS.md          # Algorithm deep dive
-│   ├── ARCHITECTURE.md        # Architecture details
-│   └── CONTRIBUTING.md        # This file
+├── CONTRIBUTING.md            # This file
 │
 ├── pyproject.toml             # Project metadata and dependencies
 ├── README.md                  # Project overview
@@ -519,9 +530,8 @@ except:  # Don't do this!
 1. **Code Comments**: Explain complex logic
 2. **Docstrings**: Document all public functions/classes
 3. **README**: Project overview and quick start
-4. **ALGORITHMS.md**: Algorithm deep dive
-5. **ARCHITECTURE.md**: System internals
-6. **Examples**: Working code samples
+4. **`moderato/scripts/` Lua scripts**: Atomic algorithm implementations
+5. **Examples**: Working code samples
 
 ### Writing Good Docstrings
 
@@ -586,9 +596,8 @@ When making changes:
 
 1. **Update docstrings** if function signature changes
 2. **Update README** if adding new features
-3. **Update ALGORITHMS.md** if modifying algorithm behavior
-4. **Update ARCHITECTURE.md** if changing system design
-5. **Add examples** for new features
+3. **Update the algorithm docstrings and Lua script comments** if modifying algorithm behavior
+4. **Add examples** for new features
 
 ---
 
@@ -837,7 +846,7 @@ async def profile_check():
 pip install -e .
 
 # Install with all extras
-pip install -e ".[dev,test,metrics]"
+poetry install
 
 # Run tests with coverage
 pytest --cov=moderato --cov-report=html
@@ -868,7 +877,7 @@ twine check dist/*
 
 ### Resources
 
-- **Documentation**: README.md, ALGORITHMS.md, ARCHITECTURE.md
+- **Documentation**: README.md and the inline docstrings in `moderato/`
 - **Examples**: `examples/` directory
 - **Tests**: `tests/` directory (great for learning usage)
 - **Issue Tracker**: Report bugs or request features

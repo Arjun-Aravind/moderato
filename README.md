@@ -52,8 +52,14 @@ Moderato is a rate limiting library designed for modern Python applications. It 
 ```bash
 pip install moderato
 
+# With FastAPI/Starlette middleware integration
+pip install 'moderato[fastapi]'
+
 # With metrics support (optional)
 pip install 'moderato[metrics]'
+
+# Everything (optional)
+pip install 'moderato[all]'
 ```
 
 ### Basic Example
@@ -155,8 +161,6 @@ async def endpoint(request: Request):
 | Accuracy | Good | Good | Best |
 
 **Recommendation:** Start with Token Bucket for better UX, use Fixed Window for strict enforcement, use Sliding Window for maximum accuracy.
-
-See [ALGORITHMS.md](ALGORITHMS.md) for detailed algorithm comparison.
 
 ---
 
@@ -395,7 +399,9 @@ poetry run python examples/algorithms_demo.py
             └─────────────┘ └─────────────┘
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed internals.
+For internals, read the algorithm implementations in `moderato/algorithms/`
+and the atomic Lua scripts in `moderato/scripts/` — both are heavily tested
+(`tests/`) and intentionally compact.
 
 ---
 

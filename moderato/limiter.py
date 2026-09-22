@@ -4,6 +4,7 @@ Main RateLimiter class implementation.
 
 import asyncio
 import logging
+import re
 from types import TracebackType
 from typing import Any, Callable, Optional
 
@@ -22,26 +23,50 @@ def _escape_glob(value: str) -> str:
     return value
 
 
+def _policy_component(requests: int, window_seconds: int) -> str:
+    """Policy component for Redis keys.
+
+    Isolates buckets per rate limit (e.g. ``p100x60``) so the same
+    identity under two different policies never shares state.
+    """
+    return f"p{requests}x{window_seconds}"
+
+
 def _suffix_matches_algorithm(suffix: str, algorithm: str) -> bool:
-    """Classify a rate limit key by the suffix after ``prefix:key:tenant``.
+    """Classify a rate limit key by the suffix after ``prefix:key``.
 
     Parsing only the suffix keeps tenant names (even one literally called
     "sliding" or ending in "bucket") from affecting classification.
-    Shapes:
-    - token bucket: "bucket"
-    - sliding window: "sliding:{window_start}"
-    - fixed window: "{window_start}"
+
+    ``suffix`` may start at the tenant component (from ``_reset_all_tenants``)
+    or at the policy component (from ``_reset_matching``); a leading component
+    that is not a policy (``p{limit}x{window}``) is treated as the tenant and
+    dropped.
+
+    Shapes (the policy component is ``p{limit}x{window}``):
+    - token bucket: "p100x60:bucket"
+    - sliding window: "p100x60:sliding:{window_start}"
+    - fixed window: "p100x60:{window_start}"
     """
     parts = suffix.split(":")
+    if parts and re.match(r"^p\d+x\d+$", parts[0]) is None:
+        parts = parts[1:]  # drop the tenant component
     if len(parts) < 2:
         return False
-    rest = parts[1:]  # drop the tenant component
+    policy_re = r"^p\d+x\d+$"
     if algorithm == "token_bucket":
-        return rest == ["bucket"]
+        return (
+            len(parts) == 2 and re.match(policy_re, parts[0]) is not None and parts[1] == "bucket"
+        )
     if algorithm == "sliding_window":
-        return len(rest) == 2 and rest[0] == "sliding" and rest[1].isdigit()
+        return (
+            len(parts) == 3
+            and re.match(policy_re, parts[0]) is not None
+            and parts[1] == "sliding"
+            and parts[2].isdigit()
+        )
     if algorithm == "fixed_window":
-        return len(rest) == 1 and rest[0].isdigit()
+        return len(parts) == 2 and re.match(policy_re, parts[0]) is not None and parts[1].isdigit()
     return True
 
 
@@ -250,12 +275,17 @@ class RateLimiter:
         except ValueError as e:
             raise RateLimitConfigError(f"Invalid rate format: {e}") from e
 
+        # A negative cost would *restore* capacity instead of consuming it
+        if cost < 0:
+            raise RateLimitConfigError(f"cost must be non-negative, got {cost}")
+
         # Select algorithm
         algorithm = algorithm or self.config.default_algorithm
         if algorithm not in ["fixed_window", "token_bucket", "sliding_window"]:
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
 
         tenant_type = tenant_type or "default"
+        policy = _policy_component(requests, window_seconds)
 
         # Use integer math (multiply by 1000 for precision)
         max_requests = requests * 1000
@@ -274,6 +304,7 @@ class RateLimiter:
                 self.config.key_prefix,
                 key,
                 tenant_type,
+                policy,
                 time_window,
             )
             result = await self.backend.check_fixed_window(
@@ -285,6 +316,7 @@ class RateLimiter:
                 self.config.key_prefix,
                 key,
                 tenant_type,
+                policy,
                 "bucket",  # Static suffix instead of time window
             )
             # Use milliseconds for precision with low rates (e.g., 1/hour)
@@ -307,6 +339,7 @@ class RateLimiter:
                 self.config.key_prefix,
                 key,
                 tenant_type,
+                policy,
                 "sliding",  # Base suffix for sliding window
             )
             current_time = redis_time_seconds
@@ -453,26 +486,14 @@ class RateLimiter:
         tenant_type = tenant_type or "default"
         algorithm = algorithm or self.config.default_algorithm
 
-        # Use Redis server time for consistent window calculation
-        redis_time_seconds, _ = await self.backend.get_redis_time()
-
-        reset_success = False
-
+        # Keys include a policy component (p{limit}x{window}), so the exact
+        # set of keys cannot be reconstructed without knowing every policy
+        # ever applied - scan for the tenant's keys and filter instead.
         if algorithm == "all":
-            # Reset all algorithm types
-            reset_success |= await self._reset_fixed_window(key, tenant_type, redis_time_seconds)
-            reset_success |= await self._reset_token_bucket(key, tenant_type)
-            reset_success |= await self._reset_sliding_window(key, tenant_type, redis_time_seconds)
-        elif algorithm == "fixed_window":
-            reset_success = await self._reset_fixed_window(key, tenant_type, redis_time_seconds)
-        elif algorithm == "token_bucket":
-            reset_success = await self._reset_token_bucket(key, tenant_type)
-        elif algorithm == "sliding_window":
-            reset_success = await self._reset_sliding_window(key, tenant_type, redis_time_seconds)
-        else:
+            return await self._reset_matching(key, tenant_type, None)
+        if algorithm not in ("fixed_window", "token_bucket", "sliding_window"):
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
-
-        return reset_success
+        return await self._reset_matching(key, tenant_type, algorithm)
 
     async def _reset_all_tenants(self, key: str, algorithm: Optional[str] = None) -> bool:
         """Reset rate limit keys for every tenant type of this key.
@@ -505,11 +526,34 @@ class RateLimiter:
 
         # Stream keys and delete in batches so peak memory stays bounded
         check_algorithm = algorithm if algorithm not in (None, "all") else None
+        return await self._delete_matching(pattern, suffix_offset, check_algorithm)
+
+    async def _reset_matching(self, key: str, tenant_type: str, algorithm: Optional[str]) -> bool:
+        """Reset rate limit keys for one tenant type of this key.
+
+        Scans for keys shaped ``{prefix}:{encoded_key}:{tenant}:*`` which
+        covers every policy, algorithm, and time window for the tenant in
+        one pass. If an ``algorithm`` is given, only keys for that algorithm
+        are deleted.
+        """
+        encoded_key = _url_encode_key_component(key)
+        encoded_tenant = _url_encode_key_component(tenant_type)
+        pattern = f"{_escape_glob(self.config.key_prefix)}:{encoded_key}:{encoded_tenant}:*"
+        # Everything after "{prefix}:{encoded_key}:{tenant}:" is the suffix
+        suffix_offset = (
+            len(self.config.key_prefix) + 1 + len(encoded_key) + 1 + len(encoded_tenant) + 1
+        )
+        return await self._delete_matching(pattern, suffix_offset, algorithm)
+
+    async def _delete_matching(
+        self, pattern: str, suffix_offset: int, algorithm: Optional[str]
+    ) -> bool:
+        """Delete keys matching ``pattern`` whose suffix classifies as ``algorithm``."""
         deleted_any = False
         batch: list[str] = []
         async for full_key in self.backend.iter_keys(pattern):
-            if check_algorithm is not None and not _suffix_matches_algorithm(
-                full_key[suffix_offset:], check_algorithm
+            if algorithm is not None and not _suffix_matches_algorithm(
+                full_key[suffix_offset:], algorithm
             ):
                 continue
             batch.append(full_key)
@@ -520,63 +564,6 @@ class RateLimiter:
         if batch and await self.backend.delete_many(batch):
             deleted_any = True
         return deleted_any
-
-    async def _reset_fixed_window(self, key: str, tenant_type: str, current_time: int) -> bool:
-        """Reset fixed window rate limit keys."""
-        reset_success = False
-
-        # Reset all common window sizes (current window for each)
-        for window_seconds in [1, 60, 3600, 86400]:  # second, minute, hour, day
-            time_window = get_time_window(window_seconds, current_time)
-            full_key = generate_key(
-                self.config.key_prefix,
-                key,
-                tenant_type,
-                time_window,
-            )
-            result = await self.backend.reset(full_key)
-            if result:
-                reset_success = True
-
-        return reset_success
-
-    async def _reset_token_bucket(self, key: str, tenant_type: str) -> bool:
-        """Reset token bucket rate limit key."""
-        full_key = generate_key(
-            self.config.key_prefix,
-            key,
-            tenant_type,
-            "bucket",
-        )
-        return await self.backend.reset(full_key)
-
-    async def _reset_sliding_window(self, key: str, tenant_type: str, current_time: int) -> bool:
-        """Reset sliding window rate limit keys."""
-        reset_success = False
-
-        # Reset sliding window keys for all common window sizes
-        for window_seconds in [1, 60, 3600, 86400]:  # second, minute, hour, day
-            base_key = generate_key(
-                self.config.key_prefix,
-                key,
-                tenant_type,
-                "sliding",
-            )
-
-            # Calculate current and previous window starts
-            window_start = current_time - (current_time % window_seconds)
-            previous_window_start = window_start - window_seconds
-
-            # Delete both current and previous window keys
-            current_key = f"{base_key}:{window_start}"
-            previous_key = f"{base_key}:{previous_window_start}"
-
-            if await self.backend.reset(current_key):
-                reset_success = True
-            if await self.backend.reset(previous_key):
-                reset_success = True
-
-        return reset_success
 
     async def get_usage(
         self,
@@ -644,6 +631,7 @@ class RateLimiter:
             self.config.key_prefix,
             key,
             tenant_type,
+            _policy_component(requests, window_seconds),
             time_window,
         )
 
@@ -675,6 +663,7 @@ class RateLimiter:
             self.config.key_prefix,
             key,
             tenant_type,
+            _policy_component(max_requests, window_seconds),
             "bucket",
         )
 
@@ -720,6 +709,7 @@ class RateLimiter:
             self.config.key_prefix,
             key,
             tenant_type,
+            _policy_component(max_requests, window_seconds),
             "sliding",
         )
 

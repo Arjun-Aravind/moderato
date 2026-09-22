@@ -8,9 +8,11 @@ These tests validate:
 """
 
 
+from datetime import datetime
+
 import pytest
 
-from moderato import RateLimiter, RateLimitExceeded
+from moderato import RateLimitConfigError, RateLimiter, RateLimitExceeded
 from moderato.decorators import RateLimitMiddleware, _get_default_key
 from moderato.utils import generate_key
 
@@ -25,25 +27,25 @@ class TestKeyCollisionPrevention:
 
     def test_colon_vs_underscore_no_collision(self):
         """Test that 'a:b' and 'a_b' produce different keys."""
-        key1 = generate_key("ratelimit", "a:b", "default", "1000")
-        key2 = generate_key("ratelimit", "a_b", "default", "1000")
+        key1 = generate_key("ratelimit", "a:b", "default", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "a_b", "default", "p100x60", "1000")
         assert key1 != key2, "Keys with ':' and '_' should not collide"
 
     def test_user_id_formats_no_collision(self):
         """Test that different user ID formats don't collide."""
-        key1 = generate_key("ratelimit", "user:123", "default", "1000")
-        key2 = generate_key("ratelimit", "user_123", "default", "1000")
-        key3 = generate_key("ratelimit", "user-123", "default", "1000")
-        key4 = generate_key("ratelimit", "user.123", "default", "1000")
+        key1 = generate_key("ratelimit", "user:123", "default", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "user_123", "default", "p100x60", "1000")
+        key3 = generate_key("ratelimit", "user-123", "default", "p100x60", "1000")
+        key4 = generate_key("ratelimit", "user.123", "default", "p100x60", "1000")
 
         keys = [key1, key2, key3, key4]
         assert len(set(keys)) == 4, "All user ID formats should produce unique keys"
 
     def test_path_formats_no_collision(self):
         """Test that different path formats don't collide."""
-        key1 = generate_key("ratelimit", "/api/users", "default", "1000")
-        key2 = generate_key("ratelimit", "_api_users", "default", "1000")
-        key3 = generate_key("ratelimit", "api:users", "default", "1000")
+        key1 = generate_key("ratelimit", "/api/users", "default", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "_api_users", "default", "p100x60", "1000")
+        key3 = generate_key("ratelimit", "api:users", "default", "p100x60", "1000")
 
         keys = [key1, key2, key3]
         assert len(set(keys)) == 3, "Path formats should produce unique keys"
@@ -54,7 +56,7 @@ class TestKeyCollisionPrevention:
         keys = []
 
         for char in dangerous_chars:
-            key = generate_key("ratelimit", f"user{char}123", "default", "1000")
+            key = generate_key("ratelimit", f"user{char}123", "default", "p100x60", "1000")
             keys.append(key)
             # Key should not contain the raw special character
             # (it should be URL encoded)
@@ -64,18 +66,18 @@ class TestKeyCollisionPrevention:
 
     def test_email_identifiers_unique(self):
         """Test that email addresses produce unique keys."""
-        key1 = generate_key("ratelimit", "user@example.com", "default", "1000")
-        key2 = generate_key("ratelimit", "user_example.com", "default", "1000")
-        key3 = generate_key("ratelimit", "user:example.com", "default", "1000")
+        key1 = generate_key("ratelimit", "user@example.com", "default", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "user_example.com", "default", "p100x60", "1000")
+        key3 = generate_key("ratelimit", "user:example.com", "default", "p100x60", "1000")
 
         keys = [key1, key2, key3]
         assert len(set(keys)) == 3
 
     def test_ip_address_formats(self):
         """Test that IP address formats are handled correctly."""
-        key1 = generate_key("ratelimit", "192.168.1.1", "default", "1000")
-        key2 = generate_key("ratelimit", "192:168:1:1", "default", "1000")  # IPv6-like
-        key3 = generate_key("ratelimit", "192_168_1_1", "default", "1000")
+        key1 = generate_key("ratelimit", "192.168.1.1", "default", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "192:168:1:1", "default", "p100x60", "1000")  # IPv6-like
+        key3 = generate_key("ratelimit", "192_168_1_1", "default", "p100x60", "1000")
 
         keys = [key1, key2, key3]
         assert len(set(keys)) == 3
@@ -83,9 +85,10 @@ class TestKeyCollisionPrevention:
     def test_url_encoding_deterministic(self):
         """Test that URL encoding produces consistent results."""
         for _ in range(100):
-            key = generate_key("ratelimit", "user:123:session", "default", "1000")
+            key = generate_key("ratelimit", "user:123:session", "default", "p100x60", "1000")
             # Should always produce the same key
-            assert key == generate_key("ratelimit", "user:123:session", "default", "1000")
+            same = generate_key("ratelimit", "user:123:session", "default", "p100x60", "1000")
+            assert key == same
 
     @pytest.mark.asyncio
     async def test_collision_prevention_in_practice(self, clean_limiter):
@@ -415,7 +418,7 @@ class TestInputSanitization:
 
         for dangerous in dangerous_inputs:
             # Should not crash
-            key = generate_key("ratelimit", dangerous, "default", "1000")
+            key = generate_key("ratelimit", dangerous, "default", "p100x60", "1000")
             assert key is not None
             assert len(key) > 0
 
@@ -441,7 +444,7 @@ class TestInputSanitization:
     def test_long_input_handling(self):
         """Test that very long inputs are handled safely."""
         long_key = "x" * 10000  # Very long input
-        key = generate_key("ratelimit", long_key, "default", "1000")
+        key = generate_key("ratelimit", long_key, "default", "p100x60", "1000")
 
         # Should be hashed to reasonable length
         assert len(key) <= 300  # Well under Redis key limit
@@ -546,3 +549,82 @@ class TestByteStringHandling:
         assert len(send_calls) >= 1
 
         await limiter.close()
+
+
+class TestPolicyIsolation:
+    """Tests for cross-policy state isolation (P0 key-collision fix).
+
+    The same identity under two different rate policies must never share
+    a Redis bucket: keys include a policy component (p{limit}x{window}).
+    """
+
+    @pytest.mark.asyncio
+    async def test_different_policies_do_not_share_state(self, redis_url):
+        """A exhausted 5/minute policy must not corrupt a 100/minute policy."""
+        limiter = RateLimiter(redis_url=redis_url, key_prefix="policy-isolation")
+        await limiter.connect()
+        try:
+            key = f"iso-{datetime.utcnow().isoformat()}"
+
+            async def try_check(**kwargs):
+                try:
+                    return await limiter.check(**kwargs)
+                except RateLimitExceeded:
+                    return False
+
+            # Exhaust the 5/minute policy: exactly 5 accepted, then denied
+            accepted_5 = 0
+            for _ in range(10):
+                accepted_5 += await try_check(key=key, rate="5/minute")
+            assert accepted_5 == 5
+
+            # The same identity under a 100/minute policy must start fresh
+            accepted_100 = 0
+            for _ in range(20):
+                if await try_check(key=key, rate="100/minute"):
+                    accepted_100 += 1
+            assert accepted_100 == 20, (
+                "100/minute policy must be isolated from 5/minute state "
+                f"(accepted {accepted_100}/20)"
+            )
+        finally:
+            await limiter.close()
+
+    @pytest.mark.asyncio
+    async def test_negative_cost_rejected(self, redis_url):
+        """Negative cost must be rejected instead of restoring capacity."""
+        limiter = RateLimiter(redis_url=redis_url, key_prefix="neg-cost")
+        await limiter.connect()
+        try:
+            key = f"neg-{datetime.utcnow().isoformat()}"
+
+            async def try_check(**kwargs):
+                try:
+                    return await limiter.check(**kwargs)
+                except RateLimitExceeded:
+                    return False
+
+            # Exhaust a 3/second policy
+            for _ in range(3):
+                assert await try_check(key=key, rate="3/second")
+            assert not await try_check(key=key, rate="3/second")
+
+            # A negative cost must raise a config error, never refund capacity
+            for algo in ["fixed_window", "token_bucket", "sliding_window"]:
+                with pytest.raises(RateLimitConfigError):
+                    await limiter.check(
+                        key=f"{key}-{algo}", rate="3/second", cost=-1, algorithm=algo
+                    )
+
+            # And the exhausted policy must still be exhausted
+            assert not await try_check(key=key, rate="3/second")
+        finally:
+            await limiter.close()
+
+    @pytest.mark.asyncio
+    async def test_zero_or_negative_rate_rejected(self):
+        """A rate limit of 0 requests must be a configuration error."""
+        with pytest.raises((ValueError, RateLimitConfigError)):
+            await RateLimiter(redis_url="redis://localhost:6379").check(
+                key="zero-rate", rate="0/minute"
+            )

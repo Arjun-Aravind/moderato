@@ -6,11 +6,7 @@ import hashlib
 import re
 from typing import Optional
 
-# Keys longer than this are replaced by a truncated prefix plus a SHA-256
-# digest (see hash_key). The preserved prefix leaves room for the 64-char
-# hex digest and a 1-char separator.
-HASH_KEY_MAX_LENGTH = 200
-HASH_KEY_PRESERVED_LEN = HASH_KEY_MAX_LENGTH - 64 - 1
+# Components longer than this are replaced by a SHA-256 digest.
 KEY_COMPONENT_MAX_LENGTH = 100
 
 
@@ -75,25 +71,6 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
         raise ValueError(f"Invalid period: {period}")
 
     return requests, period_seconds[period]
-
-
-def scan_literal_may_miss_hashed_keys(scan_literal_len: int) -> bool:
-    """Whether a SCAN/MATCH pattern with this literal head can miss hashed keys.
-
-    ``hash_key`` replaces keys longer than ``HASH_KEY_MAX_LENGTH`` with their
-    first ``HASH_KEY_PRESERVED_LEN`` characters plus a SHA-256 digest. A
-    pattern only matches such a hashed key if the caller-controlled literal
-    part (everything before the wildcard) fits within the preserved prefix.
-
-    Args:
-        scan_literal_len: Length of the pattern's literal part, i.e. the
-            number of leading key characters that must survive hashing
-            (``prefix:identifier[:tenant]:`` including separators).
-
-    Returns:
-        True if keys hashed by ``hash_key`` may no longer match the pattern.
-    """
-    return scan_literal_len > HASH_KEY_PRESERVED_LEN
 
 
 def generate_key(
@@ -212,43 +189,6 @@ def get_time_window(window_seconds: int, timestamp: Optional[int] = None) -> str
     # Align to window boundary using epoch
     window_start = timestamp - (timestamp % window_seconds)
     return str(window_start)
-
-
-def hash_key(key: str, max_length: int = HASH_KEY_MAX_LENGTH) -> str:
-    """
-    Hash a key if it's too long for Redis.
-
-    Redis keys can be up to 512MB, but very long keys impact performance.
-    This function hashes keys that exceed a reasonable length.
-
-    Args:
-        key: The original key
-        max_length: Maximum allowed key length before hashing
-
-    Returns:
-        Original key or hashed version if too long
-
-    Examples:
-        >>> short_key = "ratelimit:user123:free:2024"
-        >>> hash_key(short_key) == short_key
-        True
-
-        >>> long_key = "ratelimit:" + "x" * 500
-        >>> len(hash_key(long_key)) < len(long_key)
-        True
-    """
-    if len(key) <= max_length:
-        return key
-
-    # Use SHA256 for consistent hashing
-    key_hash = hashlib.sha256(key.encode()).hexdigest()
-
-    # Preserve some prefix for debugging
-    prefix_len = max_length - len(key_hash) - 1
-    if prefix_len > 0:
-        return f"{key[:prefix_len]}_{key_hash}"
-
-    return key_hash
 
 
 def calculate_cost(requests: int, window_seconds: int) -> float:

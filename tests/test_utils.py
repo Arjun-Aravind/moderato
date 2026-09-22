@@ -2,7 +2,7 @@
 Unit tests for utility functions.
 
 These tests do not require Redis and focus on pure Python functionality.
-They validate key generation, rate parsing, window alignment, and key hashing.
+They validate key generation, rate parsing, and window alignment.
 """
 
 import time
@@ -14,7 +14,6 @@ from moderato.utils import (
     calculate_cost,
     generate_key,
     get_time_window,
-    hash_key,
     parse_rate,
 )
 
@@ -277,55 +276,6 @@ class TestGetTimeWindow:
         """Test that return value is a string."""
         window = get_time_window(60, 1700000100)
         assert isinstance(window, str)
-
-
-class TestHashKey:
-    """Test suite for hash_key() function."""
-
-    def test_short_key_unchanged(self):
-        """Test that short keys are not hashed."""
-        short_key = "ratelimit:user123:default:2024"
-        assert hash_key(short_key) == short_key
-
-    def test_key_at_max_length_unchanged(self):
-        """Test that key exactly at max length is unchanged."""
-        key = "x" * 200
-        assert hash_key(key, max_length=200) == key
-
-    def test_long_key_is_hashed(self):
-        """Test that long keys are hashed."""
-        long_key = "ratelimit:" + "x" * 500
-        hashed = hash_key(long_key)
-        assert len(hashed) < len(long_key)
-        assert len(hashed) <= 200  # Default max_length
-
-    def test_hash_is_deterministic(self):
-        """Test that hashing produces same result for same input."""
-        long_key = "ratelimit:" + "x" * 500
-        hashed1 = hash_key(long_key)
-        hashed2 = hash_key(long_key)
-        assert hashed1 == hashed2
-
-    def test_different_keys_produce_different_hashes(self):
-        """Test that different keys produce different hashes."""
-        key1 = "ratelimit:" + "x" * 500
-        key2 = "ratelimit:" + "y" * 500
-        hashed1 = hash_key(key1)
-        hashed2 = hash_key(key2)
-        assert hashed1 != hashed2
-
-    def test_prefix_preserved_in_hash(self):
-        """Test that some prefix is preserved for debugging."""
-        long_key = "ratelimit:user123:" + "x" * 500
-        hashed = hash_key(long_key)
-        # The hashed key should contain some of the original prefix
-        assert "ratelimit" in hashed or "_" in hashed
-
-    def test_custom_max_length(self):
-        """Test custom max_length parameter."""
-        long_key = "ratelimit:" + "x" * 200
-        hashed = hash_key(long_key, max_length=100)
-        assert len(hashed) <= 100
 
 
 class TestCalculateCost:

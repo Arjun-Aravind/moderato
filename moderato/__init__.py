@@ -25,15 +25,32 @@ FastAPI integration:
 
 from .exceptions import BackendError, RateLimitConfigError, RateLimitExceeded
 from .limiter import RateLimiter
-from .middleware import RateLimitHeadersMiddleware
 from .models import CheckResult, RateLimitConfig
+
+# Framework integration (Starlette middleware) is optional - only import
+# if starlette is available. Install with: pip install 'moderato[fastapi]'
+try:
+    from .middleware import RateLimitHeadersMiddleware
+
+    _FRAMEWORK_AVAILABLE = True
+except ModuleNotFoundError as exc:
+    # Hide only a missing starlette; a defect inside middleware.py or its
+    # other dependencies must surface instead of being swallowed.
+    if exc.name is None or not (exc.name == "starlette" or exc.name.startswith("starlette.")):
+        raise
+    _FRAMEWORK_AVAILABLE = False
+    RateLimitHeadersMiddleware = None  # type: ignore[misc, assignment]
 
 # Metrics are optional - only import if prometheus_client is available
 try:
     from .metrics import RateLimitMetrics, init_metrics
 
     _METRICS_AVAILABLE = True
-except ImportError:
+except ModuleNotFoundError as exc:
+    if exc.name is None or not (
+        exc.name == "prometheus_client" or exc.name.startswith("prometheus_client.")
+    ):
+        raise
     _METRICS_AVAILABLE = False
     RateLimitMetrics = None  # type: ignore[misc, assignment]
     init_metrics = None  # type: ignore[assignment]
@@ -49,8 +66,10 @@ __all__ = [
     "BackendError",
     "RateLimitConfig",
     "CheckResult",
-    "RateLimitHeadersMiddleware",
 ]
+
+if _FRAMEWORK_AVAILABLE:
+    __all__.append("RateLimitHeadersMiddleware")
 
 # Add metrics to exports if available
 if _METRICS_AVAILABLE:

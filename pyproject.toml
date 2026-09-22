@@ -5,6 +5,7 @@ description = "Production-ready rate limiting library for Python with Redis back
 authors = ["Arjun Aravind <arjunaravind748@gmail.com>"]
 readme = "README.md"
 packages = [{include = "moderato"}]
+include = [{path = "moderato/py.typed", format = ["sdist", "wheel"]}]
 keywords = ["rate-limit", "rate-limiting", "redis", "fastapi", "async", "api", "throttle"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -28,7 +29,19 @@ documentation = "https://github.com/Arjun-Aravind/moderato#readme"
 python = "^3.9"
 redis = "^5.0.0"
 pydantic = "^2.0"
-pydantic-settings = "^2.0"
+typing-extensions = ">=4.0"
+
+# Optional integrations
+starlette = {version = ">=0.27", optional = true}
+fastapi = {version = ">=0.100", optional = true}
+prometheus-client = {version = ">=0.19", optional = true}
+
+[tool.poetry.extras]
+# FastAPI + Starlette middleware: pip install 'moderato[fastapi]'
+fastapi = ["starlette", "fastapi"]
+# Prometheus metrics: pip install 'moderato[metrics]'
+metrics = ["prometheus-client"]
+all = ["starlette", "fastapi", "prometheus-client"]
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4"

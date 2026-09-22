@@ -25,6 +25,48 @@ class RateLimitResult(NamedTuple):
     retry_after: int  # Milliseconds until rate limit resets
 
 
+# Inline fallback for the fixed window script, used only when
+# moderato/scripts/fixed_window.lua is unavailable (e.g. a broken install).
+# NOTE: This must stay in sync with scripts/fixed_window.lua, including the
+# negative-cost guard; tests/test_security.py executes both against Redis.
+FIXED_WINDOW_FALLBACK_SCRIPT = """
+local key = KEYS[1]
+local max_requests = tonumber(ARGV[1])
+local window_seconds = tonumber(ARGV[2])
+local window_end = tonumber(ARGV[3])
+local cost = tonumber(ARGV[4]) or 1000
+
+-- Defense in depth: a negative cost would restore capacity
+if cost < 0 then
+    return redis.error_reply("cost must be non-negative")
+end
+
+local current = redis.call('INCRBY', key, cost)
+
+if current == cost then
+    redis.call('EXPIREAT', key, window_end)
+end
+
+local ttl = redis.call('TTL', key)
+if ttl < 0 then
+    ttl = window_seconds
+    redis.call('EXPIREAT', key, window_end)
+end
+
+local allowed = 0
+local remaining = 0
+
+if current <= max_requests then
+    allowed = 1
+    remaining = max_requests - current
+else
+    remaining = 0
+end
+
+return {allowed, remaining, ttl * 1000}
+"""
+
+
 class RedisBackend:
     """
     Redis backend with Lua script support for atomic rate limiting.
@@ -59,40 +101,7 @@ class RedisBackend:
         else:
             # Fallback inline script if file doesn't exist
             # NOTE: This must stay in sync with scripts/fixed_window.lua
-            self._scripts[
-                "fixed_window"
-            ] = """
--- Fixed Window Rate Limiting Script (Inline Fallback)
-local key = KEYS[1]
-local max_requests = tonumber(ARGV[1])
-local window_seconds = tonumber(ARGV[2])
-local window_end = tonumber(ARGV[3])
-local cost = tonumber(ARGV[4]) or 1000
-
-local current = redis.call('INCRBY', key, cost)
-
-if current == cost then
-    redis.call('EXPIREAT', key, window_end)
-end
-
-local ttl = redis.call('TTL', key)
-if ttl < 0 then
-    ttl = window_seconds
-    redis.call('EXPIREAT', key, window_end)
-end
-
-local allowed = 0
-local remaining = 0
-
-if current <= max_requests then
-    allowed = 1
-    remaining = max_requests - current
-else
-    remaining = 0
-end
-
-return {allowed, remaining, ttl * 1000}
-"""
+            self._scripts["fixed_window"] = FIXED_WINDOW_FALLBACK_SCRIPT
 
         # Load token bucket script
         token_bucket_path = script_dir / "token_bucket.lua"
@@ -628,6 +637,33 @@ return {allowed, remaining, ttl * 1000}
         except RedisError as e:
             logger.error(f"Failed to get usage for key {key}: {e}")
             raise BackendError(f"Failed to get usage statistics: {e}") from e
+
+    async def raw_ttl(self, key: str) -> int:
+        """Return the raw Redis TTL of a key, without masking sentinel values.
+
+        Unlike :meth:`get_usage`, which maps TTL -1 (no expiry) and -2
+        (missing key) to 0, this returns them unchanged so callers can
+        distinguish a live bucket in its final second from a missing
+        expiry or a missing key.
+
+        Args:
+            key: Rate limit key to check
+
+        Returns:
+            Raw Redis TTL: -2 if the key is missing, -1 if it has no
+            expiry, otherwise seconds until expiry.
+
+        Raises:
+            BackendError: If not connected or Redis operation fails
+        """
+        if not self._redis or not self._connected:
+            raise BackendError("Redis not connected. Call connect() first.")
+
+        try:
+            return int(await self._redis.ttl(key))
+        except RedisError as e:
+            logger.error(f"Failed to get TTL for key {key}: {e}")
+            raise BackendError(f"Failed to get TTL: {e}") from e
 
     async def get_redis_time(self) -> tuple[int, int]:
         """

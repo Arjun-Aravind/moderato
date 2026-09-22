@@ -313,7 +313,14 @@ class TestRateLimitMiddleware:
                 assert client.get("/anything").status_code == 200
 
             before = int(time.time())
-            response = client.get("/anything")
+            # If the 5-request fill straddled a minute boundary, the bucket
+            # reset and the probe succeeds; keep probing so a boundary straddle
+            # cannot flake this.
+            response = None
+            for _ in range(15):
+                response = client.get("/anything")
+                if response.status_code == 429:
+                    break
 
         assert response.status_code == 429
         assert response.headers["X-RateLimit-Limit"] == "5"

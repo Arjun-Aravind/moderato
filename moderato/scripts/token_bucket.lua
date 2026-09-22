@@ -24,6 +24,11 @@ local window_seconds = tonumber(ARGV[3])
 local current_time_ms = tonumber(ARGV[4])
 local cost = tonumber(ARGV[5]) or 1000  -- Default to 1000 (cost=1) if not provided
 
+-- Defense in depth: a negative cost would restore capacity
+if cost < 0 then
+    return redis.error_reply("cost must be non-negative")
+end
+
 -- Get current bucket state
 local bucket = redis.call('HMGET', key, 'tokens', 'last_refill_ms')
 local current_tokens = tonumber(bucket[1]) or max_tokens  -- Start with full bucket

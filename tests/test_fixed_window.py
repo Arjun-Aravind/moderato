@@ -8,7 +8,8 @@ from datetime import datetime
 import pytest
 
 from moderato import RateLimiter, RateLimitExceeded
-from tests.conftest import sleep_past_window_boundary
+from moderato.utils import _url_encode_key_component
+from tests.conftest import raw_key_ttl, sleep_past_window_boundary
 
 
 class TestFixedWindow:
@@ -188,8 +189,19 @@ class TestFixedWindow:
         assert usage["current"] == 42
         assert usage["limit"] == 100
         assert usage["remaining"] == 58
-        assert usage["ttl"] > 0
-        assert usage["ttl"] <= 60
+        # TTL truncates to whole seconds, so a run landing in the final second
+        # of the window legitimately reports 0 while the bucket is still alive.
+        assert 0 <= usage["ttl"] <= 60
+
+        # get_usage maps Redis TTL -1 (no expiry) and -2 (missing key) to 0,
+        # so the range above alone cannot catch a dropped EXPIREAT: assert on
+        # the raw key TTL instead.
+        assert (
+            await raw_key_ttl(
+                limiter.backend, f"{limiter.config.key_prefix}:{_url_encode_key_component(key)}:*"
+            )
+            >= 0
+        )
 
     @pytest.mark.asyncio
     async def test_reset_functionality(self, clean_limiter):

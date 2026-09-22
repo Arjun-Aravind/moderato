@@ -53,9 +53,10 @@ class TestParseRate:
         assert parse_rate("999999999/day") == (999999999, 86400)
 
     def test_invalid_zero_rate(self):
-        """Test that zero rate is parsed but should be handled by caller."""
-        # parse_rate accepts 0, validation happens elsewhere
-        assert parse_rate("0/minute") == (0, 60)
+        """Test that a zero rate is rejected: a 0-request limit is meaningless."""
+        with pytest.raises(ValueError) as exc_info:
+            parse_rate("0/minute")
+        assert "at least 1" in str(exc_info.value)
 
     def test_invalid_format_missing_slash(self):
         """Test invalid format without slash."""
@@ -137,7 +138,7 @@ class TestGenerateKey:
 
     def test_basic_key_generation(self):
         """Test basic key generation."""
-        key = generate_key("ratelimit", "user123", "default", "1700000100")
+        key = generate_key("ratelimit", "user123", "default", "p100x60", "1700000100")
         assert key.startswith("ratelimit:")
         assert "user123" in key
         assert "default" in key
@@ -145,16 +146,16 @@ class TestGenerateKey:
 
     def test_no_key_collision_colon_vs_underscore(self):
         """Test that 'user:123' and 'user_123' produce different keys (NEW-C9 fix)."""
-        key1 = generate_key("ratelimit", "user:123", "default", "1700000100")
-        key2 = generate_key("ratelimit", "user_123", "default", "1700000100")
+        key1 = generate_key("ratelimit", "user:123", "default", "p100x60", "1700000100")
+        key2 = generate_key("ratelimit", "user_123", "default", "p100x60", "1700000100")
         assert key1 != key2, "Keys with ':' and '_' should not collide"
 
     def test_no_key_collision_special_chars(self):
         """Test that different special characters produce different keys."""
-        key1 = generate_key("ratelimit", "a:b", "default", "1000")
-        key2 = generate_key("ratelimit", "a_b", "default", "1000")
-        key3 = generate_key("ratelimit", "a-b", "default", "1000")
-        key4 = generate_key("ratelimit", "a.b", "default", "1000")
+        key1 = generate_key("ratelimit", "a:b", "default", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "a_b", "default", "p100x60", "1000")
+        key3 = generate_key("ratelimit", "a-b", "default", "p100x60", "1000")
+        key4 = generate_key("ratelimit", "a.b", "default", "p100x60", "1000")
 
         # All should be different
         keys = [key1, key2, key3, key4]
@@ -162,33 +163,39 @@ class TestGenerateKey:
 
     def test_url_encoding_applied(self):
         """Test that URL encoding is applied to identifier."""
-        key = generate_key("ratelimit", "user:123:session", "premium", "1000")
+        key = generate_key("ratelimit", "user:123:session", "premium", "p100x60", "1000")
         # Colon should be encoded as %3A
         assert "%3A" in key or "user%3A123%3Asession" in key
 
     def test_special_characters_in_tenant(self):
         """Test special characters in tenant type."""
-        key = generate_key("ratelimit", "user", "tier:1", "1000")
+        key = generate_key("ratelimit", "user", "tier:1", "p100x60", "1000")
         # Should not crash and should encode the colon
         assert key is not None
         assert len(key) > 0
 
     def test_unicode_identifier(self):
         """Test unicode characters in identifier."""
-        key = generate_key("ratelimit", "用户123", "default", "1000")
+        key = generate_key("ratelimit", "用户123", "default", "p100x60", "1000")
         assert key is not None
         assert "ratelimit" in key
 
+    def test_different_policies_produce_different_keys(self):
+        """Test that the same identity under different rate limits never shares a bucket."""
+        key1 = generate_key("ratelimit", "user123", "default", "p5x60", "1000")
+        key2 = generate_key("ratelimit", "user123", "default", "p100x60", "1000")
+        assert key1 != key2, "Different rate policies must not share state"
+
     def test_email_identifier(self):
         """Test email address as identifier."""
-        key = generate_key("ratelimit", "user@example.com", "default", "1000")
+        key = generate_key("ratelimit", "user@example.com", "default", "p100x60", "1000")
         assert key is not None
         # @ should be encoded
         assert "%40" in key
 
     def test_path_identifier(self):
         """Test path-like identifier."""
-        key = generate_key("ratelimit", "/api/v1/users", "default", "1000")
+        key = generate_key("ratelimit", "/api/v1/users", "default", "p100x60", "1000")
         assert key is not None
         # Slashes should be encoded
         assert "%2F" in key
@@ -196,7 +203,7 @@ class TestGenerateKey:
     def test_long_key_is_hashed(self):
         """Test that very long keys are hashed."""
         long_id = "x" * 500
-        key = generate_key("ratelimit", long_id, "default", "1000")
+        key = generate_key("ratelimit", long_id, "default", "p100x60", "1000")
         # Key should be shorter than the original would be
         assert len(key) < len(long_id) + 50
 
@@ -380,12 +387,12 @@ class TestKeyCollisionPrevention:
         ]
 
         for id1, id2 in test_cases:
-            key1 = generate_key("ratelimit", id1, "default", "1000")
-            key2 = generate_key("ratelimit", id2, "default", "1000")
+            key1 = generate_key("ratelimit", id1, "default", "p100x60", "1000")
+            key2 = generate_key("ratelimit", id2, "default", "p100x60", "1000")
             assert key1 != key2, f"Keys for '{id1}' and '{id2}' should not collide"
 
     def test_tenant_collision_prevention(self):
         """Test that tenant types with similar characters don't collide."""
-        key1 = generate_key("ratelimit", "user", "tier:1", "1000")
-        key2 = generate_key("ratelimit", "user", "tier_1", "1000")
+        key1 = generate_key("ratelimit", "user", "tier:1", "p100x60", "1000")
+        key2 = generate_key("ratelimit", "user", "tier_1", "p100x60", "1000")
         assert key1 != key2, "Tenant types with ':' and '_' should not collide"

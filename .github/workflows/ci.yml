@@ -88,6 +88,57 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+  wheel-smoke:
+    name: Wheel Install & Import Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.3
+
+      - name: Build package
+        run: poetry build
+
+      - name: Verify py.typed and Lua scripts ship in the wheel
+        run: |
+          unzip -l dist/*.whl | grep 'moderato/py.typed'
+          unzip -l dist/*.whl | grep 'moderato/scripts/fixed_window.lua'
+          unzip -l dist/*.whl | grep 'moderato/scripts/token_bucket.lua'
+          unzip -l dist/*.whl | grep 'moderato/scripts/sliding_window.lua'
+
+      - name: Install wheel in a clean venv (no extras)
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/pip check
+
+      - name: Core import must work without optional dependencies
+        run: |
+          /tmp/smoke/bin/python -c "
+          import moderato
+          assert moderato.RateLimiter is not None
+          assert moderato.RateLimitHeadersMiddleware is None
+          print('clean-env core import: OK')
+          "
+
+      - name: Reinstall with [all] extra and verify full surface
+        run: |
+          /tmp/smoke/bin/pip install -q "moderato[all] @ file://$(pwd)/$(ls dist/*.whl)" --force-reinstall
+          /tmp/smoke/bin/python -c "
+          import moderato
+          assert moderato.RateLimitHeadersMiddleware is not None
+          assert moderato.RateLimitMetrics is not None
+          print('clean-env [all] import: OK')
+          "
+
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest

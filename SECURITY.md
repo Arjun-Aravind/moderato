@@ -11,7 +11,12 @@
 
 Please do **not** report security vulnerabilities through public GitHub issues.
 
-Instead, open a [private security advisory](https://github.com/Arjun-Aravind/moderato/security/advisories/new) on this repository. Include:
+Two private options:
+
+- Open a [private security advisory](https://github.com/Arjun-Aravind/moderato/security/advisories/new) on this repository (requires "Private vulnerability reporting" to be enabled in the repository settings), or
+- Email **arjunaravind748@gmail.com** with `[security] moderato` in the subject.
+
+Include:
 
 - A description of the vulnerability and its impact
 - Steps to reproduce or a proof of concept
@@ -24,8 +29,8 @@ You can expect an initial response within 7 days. Once a fix is released, the ad
 Moderato is infrastructure security tooling, so a few design decisions are worth knowing about when reporting:
 
 - Keys are built from user-supplied identifiers. Identifier components are normalized and hashed when they exceed 100 characters to keep keys bounded; the limiter never passes raw, unbounded user input into Redis key slots.
-- The default decorator scope is derived from the HTTP method and route path. Proxy header spoofing (`X-Forwarded-For` and friends) is handled by an explicit client-IP extraction policy — see the README's security section for how to configure trusted proxies.
-- The Lua scripts are the sole writers of rate-limit state. They are atomic, use integer-only arithmetic, and never execute user-supplied strings.
+- The default decorator scope is derived from the HTTP method and route path. Client-IP extraction from proxy headers (`X-Forwarded-For` and friends) is controlled by `trust_proxy_headers`: leave it `False` unless the application is behind a reverse proxy you control that overwrites these headers.
+- Rate-limit checks and updates run through atomic Lua scripts that never execute user-supplied strings. Fixed-window and sliding-window accounting is integer-only; the token bucket accumulates fractional refills in floating point with millisecond precision. Administrative `reset()` deletes keys directly with `SCAN`/`DEL` and does not interleave with checks atomically.
 - Costs passed to `check()` are validated as strictly positive integers before any Redis call is made.
 
 If you believe a rate limit can be bypassed or key state can leak across tenants or routes, that is a security bug — please report it privately.

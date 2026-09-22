@@ -10,7 +10,7 @@ These tests validate:
 """
 
 import asyncio
-from datetime import datetime
+from uuid import uuid4
 
 import pytest
 
@@ -62,7 +62,7 @@ class TestInputValidation:
     async def test_very_high_cost(self, clean_limiter):
         """Test that very high cost is handled correctly."""
         limiter = clean_limiter
-        key = f"high-cost-{datetime.utcnow().isoformat()}"
+        key = f"high-cost-{uuid4().hex}"
 
         # Cost higher than limit should be denied
         with pytest.raises(RateLimitExceeded):
@@ -76,7 +76,7 @@ class TestExtremeValues:
     async def test_very_high_limit(self, clean_limiter):
         """Test that very high limit (1,000,000/hour) works."""
         limiter = clean_limiter
-        key = f"high-limit-{datetime.utcnow().isoformat()}"
+        key = f"high-limit-{uuid4().hex}"
         rate = "1000000/hour"
 
         # Should allow many requests
@@ -93,7 +93,7 @@ class TestExtremeValues:
     async def test_very_short_window(self, clean_limiter):
         """Test that very short window (per second) works correctly."""
         limiter = clean_limiter
-        key = f"short-window-{datetime.utcnow().isoformat()}"
+        key = f"short-window-{uuid4().hex}"
         rate = "5/second"
 
         # Use up limit
@@ -110,7 +110,7 @@ class TestExtremeValues:
     async def test_very_long_window(self, clean_limiter):
         """Test that very long window (per day) works correctly."""
         limiter = clean_limiter
-        key = f"long-window-{datetime.utcnow().isoformat()}"
+        key = f"long-window-{uuid4().hex}"
         rate = "1000/day"
 
         # Should work
@@ -129,7 +129,7 @@ class TestExtremeValues:
         This validates that "1/hour" doesn't cause divide-by-zero or crash.
         """
         limiter = clean_limiter
-        key = f"low-rate-tb-{datetime.utcnow().isoformat()}"
+        key = f"low-rate-tb-{uuid4().hex}"
         rate = "1/hour"
 
         # First request should succeed
@@ -143,7 +143,7 @@ class TestExtremeValues:
     async def test_very_low_rate_token_bucket(self, clean_limiter):
         """Test token bucket with 10/day rate."""
         limiter = clean_limiter
-        key = f"very-low-rate-{datetime.utcnow().isoformat()}"
+        key = f"very-low-rate-{uuid4().hex}"
         rate = "10/day"
 
         # Should allow requests
@@ -234,7 +234,7 @@ class TestCheckWithInfo:
     async def test_returns_check_result(self, clean_limiter):
         """Test that check_with_info returns CheckResult dataclass."""
         limiter = clean_limiter
-        key = f"info-result-{datetime.utcnow().isoformat()}"
+        key = f"info-result-{uuid4().hex}"
 
         result = await limiter.check_with_info(key=key, rate="10/minute")
 
@@ -248,7 +248,7 @@ class TestCheckWithInfo:
     async def test_check_with_info_no_exception_when_allowed(self, clean_limiter):
         """Test that check_with_info doesn't raise when allowed."""
         limiter = clean_limiter
-        key = f"info-no-exc-{datetime.utcnow().isoformat()}"
+        key = f"info-no-exc-{uuid4().hex}"
 
         # Should not raise, should return result
         result = await limiter.check_with_info(key=key, rate="10/minute")
@@ -257,7 +257,7 @@ class TestCheckWithInfo:
     async def test_check_with_info_when_denied(self, clean_limiter):
         """Test check_with_info when rate limit is exceeded."""
         limiter = clean_limiter
-        key = f"info-denied-{datetime.utcnow().isoformat()}"
+        key = f"info-denied-{uuid4().hex}"
         rate = "5/minute"
 
         # Use up the limit
@@ -276,7 +276,7 @@ class TestCheckWithInfo:
     async def test_check_with_info_remaining_decrements(self, clean_limiter):
         """Test that remaining decrements with each request."""
         limiter = clean_limiter
-        key = f"info-decrement-{datetime.utcnow().isoformat()}"
+        key = f"info-decrement-{uuid4().hex}"
         rate = "10/minute"
 
         for i in range(10):
@@ -289,7 +289,7 @@ class TestCheckWithInfo:
         algorithms = ["fixed_window", "token_bucket", "sliding_window"]
 
         for algo in algorithms:
-            key = f"info-algo-{algo}-{datetime.utcnow().isoformat()}"
+            key = f"info-algo-{algo}-{uuid4().hex}"
             result = await limiter.check_with_info(key=key, rate="10/minute", algorithm=algo)
             assert isinstance(result, CheckResult)
             assert result.allowed is True
@@ -303,7 +303,7 @@ class TestAlgorithmAwareGetUsage:
     async def test_get_usage_fixed_window(self, clean_limiter):
         """Test get_usage with fixed_window algorithm."""
         limiter = clean_limiter
-        key = f"usage-fw-{datetime.utcnow().isoformat()}"
+        key = f"usage-fw-{uuid4().hex}"
         rate = "100/minute"
 
         for _ in range(25):
@@ -330,7 +330,7 @@ class TestAlgorithmAwareGetUsage:
     async def test_get_usage_token_bucket(self, clean_limiter):
         """Test get_usage with token_bucket algorithm."""
         limiter = clean_limiter
-        key = f"usage-tb-{datetime.utcnow().isoformat()}"
+        key = f"usage-tb-{uuid4().hex}"
         rate = "100/minute"
 
         for _ in range(30):
@@ -346,7 +346,7 @@ class TestAlgorithmAwareGetUsage:
     async def test_get_usage_sliding_window(self, clean_limiter):
         """Test get_usage with sliding_window algorithm."""
         limiter = clean_limiter
-        key = f"usage-sw-{datetime.utcnow().isoformat()}"
+        key = f"usage-sw-{uuid4().hex}"
         rate = "100/minute"
 
         for _ in range(20):
@@ -368,7 +368,7 @@ class TestAlgorithmAwareReset:
     async def test_reset_fixed_window(self, clean_limiter):
         """Test reset for fixed_window algorithm."""
         limiter = clean_limiter
-        key = f"reset-fw-{datetime.utcnow().isoformat()}"
+        key = f"reset-fw-{uuid4().hex}"
         rate = "5/minute"
 
         # Use up limit
@@ -390,7 +390,7 @@ class TestAlgorithmAwareReset:
     async def test_reset_token_bucket(self, clean_limiter):
         """Test reset for token_bucket algorithm."""
         limiter = clean_limiter
-        key = f"reset-tb-{datetime.utcnow().isoformat()}"
+        key = f"reset-tb-{uuid4().hex}"
         rate = "5/minute"
 
         # Use up tokens
@@ -412,7 +412,7 @@ class TestAlgorithmAwareReset:
     async def test_reset_sliding_window(self, clean_limiter):
         """Test reset for sliding_window algorithm."""
         limiter = clean_limiter
-        key = f"reset-sw-{datetime.utcnow().isoformat()}"
+        key = f"reset-sw-{uuid4().hex}"
         rate = "5/minute"
 
         # Use up limit
@@ -434,7 +434,7 @@ class TestAlgorithmAwareReset:
     async def test_reset_all_algorithms(self, clean_limiter):
         """Test reset with algorithm='all' clears all types."""
         limiter = clean_limiter
-        key = f"reset-all-{datetime.utcnow().isoformat()}"
+        key = f"reset-all-{uuid4().hex}"
         rate = "5/minute"
 
         # Use up limits on all algorithms
@@ -498,7 +498,7 @@ class TestRetryAfterAccuracy:
     async def test_retry_after_fixed_window(self, clean_limiter):
         """Test that retry_after is accurate for fixed window."""
         limiter = clean_limiter
-        key = f"retry-fw-{datetime.utcnow().isoformat()}"
+        key = f"retry-fw-{uuid4().hex}"
         rate = "5/second"
 
         # Use up limit
@@ -518,7 +518,7 @@ class TestRetryAfterAccuracy:
     async def test_retry_after_token_bucket(self, clean_limiter):
         """Test that retry_after is accurate for token bucket."""
         limiter = clean_limiter
-        key = f"retry-tb-{datetime.utcnow().isoformat()}"
+        key = f"retry-tb-{uuid4().hex}"
         rate = "10/second"
 
         # Use up all tokens
@@ -545,7 +545,7 @@ class TestEmptyAndMissingKeys:
     async def test_get_usage_nonexistent_key(self, clean_limiter):
         """Test get_usage for a key that doesn't exist."""
         limiter = clean_limiter
-        key = f"nonexistent-{datetime.utcnow().isoformat()}"
+        key = f"nonexistent-{uuid4().hex}"
 
         usage = await limiter.get_usage(key=key, rate="10/minute")
 
@@ -557,7 +557,7 @@ class TestEmptyAndMissingKeys:
     async def test_reset_nonexistent_key(self, clean_limiter):
         """Test reset for a key that doesn't exist."""
         limiter = clean_limiter
-        key = f"nonexistent-reset-{datetime.utcnow().isoformat()}"
+        key = f"nonexistent-reset-{uuid4().hex}"
 
         # Should not raise, may return True or False
         result = await limiter.reset(key=key)

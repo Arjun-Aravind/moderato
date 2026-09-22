@@ -7,7 +7,8 @@ Run with:
 
 import os
 import sys
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -19,10 +20,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+limiter = RateLimiter(redis_url=redis_url)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await limiter.connect()
+    print(f"Connected to Redis at {redis_url}")
+    yield
+    await limiter.close()
+    print("Disconnected from Redis")
+
+
 app = FastAPI(
     title="Moderato Demo API",
     description="Demonstration of rate limiting with Moderato",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -32,23 +47,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-limiter = RateLimiter(redis_url=redis_url)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize rate limiter on startup."""
-    await limiter.connect()
-    print(f"Connected to Redis at {redis_url}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up on shutdown."""
-    await limiter.close()
-    print("Disconnected from Redis")
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -92,7 +90,7 @@ async def public_endpoint():
     """Public endpoint without rate limiting."""
     return {
         "message": "This endpoint is not rate limited",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -108,7 +106,7 @@ async def limited_endpoint(request: Request):
         "message": "This endpoint is rate limited",
         "limit": "10 requests per minute",
         "your_ip": request.client.host,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -124,7 +122,7 @@ async def strict_endpoint(request: Request):
         "message": "This endpoint has strict rate limiting",
         "limit": "3 requests per second",
         "your_ip": request.client.host,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -140,7 +138,7 @@ async def user_endpoint(request: Request, user_id: str):
         "message": f"User-specific endpoint for {user_id}",
         "user_id": user_id,
         "limit": "100 requests per hour per user",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -168,7 +166,7 @@ async def tenant_endpoint(request: Request):
         "tenant_id": tenant_id,
         "tenant_tier": tenant_tier,
         "limit": "50 requests per minute",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -194,7 +192,7 @@ async def expensive_operation(request: Request):
         "cost": cost,
         "limit": "20 requests per minute",
         "note": f"This request counted as {cost} regular request(s)",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -207,7 +205,7 @@ async def status_endpoint():
         "api_status": "healthy",
         "rate_limiter_status": "healthy" if health else "unhealthy",
         "redis_connected": health,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -248,7 +246,7 @@ async def reset_endpoint(user_id: str, request: Request):
     return {
         "message": f"Rate limit reset for user {user_id}",
         "success": result,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

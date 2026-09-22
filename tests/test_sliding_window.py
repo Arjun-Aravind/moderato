@@ -9,7 +9,7 @@ These tests validate the sliding window implementation, focusing on:
 """
 
 import asyncio
-from datetime import datetime
+from uuid import uuid4
 
 import pytest
 
@@ -23,7 +23,7 @@ class TestSlidingWindowBasic:
     async def test_basic_rate_limiting(self, clean_limiter):
         """Test that basic rate limiting allows and denies correctly."""
         limiter = clean_limiter
-        key = f"sliding-basic-{datetime.utcnow().isoformat()}"
+        key = f"sliding-basic-{uuid4().hex}"
         rate = "5/minute"
 
         # First 5 requests should pass
@@ -41,7 +41,7 @@ class TestSlidingWindowBasic:
     async def test_sliding_window_allows_burst(self, clean_limiter):
         """Test that initial burst is allowed up to limit."""
         limiter = clean_limiter
-        key = f"sliding-burst-{datetime.utcnow().isoformat()}"
+        key = f"sliding-burst-{uuid4().hex}"
         rate = "50/minute"
 
         # Should allow 50 requests immediately
@@ -56,7 +56,7 @@ class TestSlidingWindowBasic:
     async def test_sliding_window_with_cost(self, clean_limiter):
         """Test sliding window with cost parameter."""
         limiter = clean_limiter
-        key = f"sliding-cost-{datetime.utcnow().isoformat()}"
+        key = f"sliding-cost-{uuid4().hex}"
         rate = "10/minute"
 
         # cost=5 should use half the limit
@@ -72,7 +72,7 @@ class TestSlidingWindowBasic:
     async def test_reset_clears_both_windows(self, clean_limiter):
         """Test that reset clears sliding window state."""
         limiter = clean_limiter
-        key = f"sliding-reset-{datetime.utcnow().isoformat()}"
+        key = f"sliding-reset-{uuid4().hex}"
         rate = "5/minute"
 
         # Use up the limit
@@ -102,7 +102,7 @@ class TestSlidingWindowWeighting:
         At 30s into a 60s window, previous window should have 50% weight.
         """
         limiter = clean_limiter
-        key = f"sliding-weight-{datetime.utcnow().isoformat()}"
+        key = f"sliding-weight-{uuid4().hex}"
         rate = "10/minute"  # 60 second window
 
         # Make 5 requests (half the limit)
@@ -125,7 +125,7 @@ class TestSlidingWindowWeighting:
         into the current window because previous window weight decreases.
         """
         limiter = clean_limiter
-        key = f"sliding-weight-decay-{datetime.utcnow().isoformat()}"
+        key = f"sliding-weight-decay-{uuid4().hex}"
         rate = "10/second"  # 1 second window for faster test
 
         # Use up 8 requests
@@ -151,7 +151,7 @@ class TestSlidingWindowWeighting:
     async def test_get_usage_shows_weight(self, clean_limiter):
         """Test that get_usage returns weight information for sliding window."""
         limiter = clean_limiter
-        key = f"sliding-usage-weight-{datetime.utcnow().isoformat()}"
+        key = f"sliding-usage-weight-{uuid4().hex}"
         rate = "100/minute"
 
         # Make some requests
@@ -183,7 +183,7 @@ class TestSlidingWindowRetryAfter:
         will free up enough capacity, not just end of current window.
         """
         limiter = clean_limiter
-        key = f"sliding-retry-{datetime.utcnow().isoformat()}"
+        key = f"sliding-retry-{uuid4().hex}"
         rate = "10/second"
 
         # Use up all requests
@@ -208,7 +208,7 @@ class TestSlidingWindowRetryAfter:
         should be the time until weight decay frees those tokens.
         """
         limiter = clean_limiter
-        key = f"sliding-retry-short-{datetime.utcnow().isoformat()}"
+        key = f"sliding-retry-short-{uuid4().hex}"
         rate = "10/second"
 
         # Use 9 requests (leave room for 1 more based on weight)
@@ -236,7 +236,7 @@ class TestSlidingWindowVsFixedWindow:
         rate = "10/hour"
 
         # Test with fixed window
-        fw_key = f"fw-smooth-{datetime.utcnow().isoformat()}"
+        fw_key = f"fw-smooth-{uuid4().hex}"
         fw_allowed = 0
         for _ in range(15):
             try:
@@ -246,7 +246,7 @@ class TestSlidingWindowVsFixedWindow:
                 pass
 
         # Test with sliding window
-        sw_key = f"sw-smooth-{datetime.utcnow().isoformat()}"
+        sw_key = f"sw-smooth-{uuid4().hex}"
         sw_allowed = 0
         for _ in range(15):
             try:
@@ -267,7 +267,7 @@ class TestSlidingWindowVsFixedWindow:
         boundary burst problem that can occur with fixed window.
         """
         limiter = clean_limiter
-        key = f"sliding-no-burst-{datetime.utcnow().isoformat()}"
+        key = f"sliding-no-burst-{uuid4().hex}"
         rate = "5/second"
 
         # Use up limit
@@ -300,7 +300,7 @@ class TestSlidingWindowVsFixedWindow:
         sliding window carries over weighted requests from the previous window.
         """
         limiter = clean_limiter
-        key = f"sliding-consistent-{datetime.utcnow().isoformat()}"
+        key = f"sliding-consistent-{uuid4().hex}"
         rate = "10/second"
 
         # First batch - use up limit
@@ -394,7 +394,7 @@ class TestSlidingWindowConcurrency:
     async def test_concurrent_requests_atomic(self, clean_limiter):
         """Test that concurrent requests maintain atomicity."""
         limiter = clean_limiter
-        key = f"sliding-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"sliding-concurrent-{uuid4().hex}"
         rate = "20/second"
 
         # Send 40 concurrent requests
@@ -417,7 +417,7 @@ class TestSlidingWindowConcurrency:
     async def test_high_concurrency_accuracy(self, clean_limiter):
         """Test sliding window accuracy under high concurrency."""
         limiter = clean_limiter
-        key = f"sliding-high-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"sliding-high-concurrent-{uuid4().hex}"
         rate = "50/second"
 
         async def make_request():
@@ -443,7 +443,7 @@ class TestSlidingWindowUsageStats:
     async def test_usage_returns_correct_fields(self, clean_limiter):
         """Test that get_usage returns correct fields for sliding window."""
         limiter = clean_limiter
-        key = f"sliding-stats-{datetime.utcnow().isoformat()}"
+        key = f"sliding-stats-{uuid4().hex}"
         rate = "100/minute"
 
         # Make some requests
@@ -470,7 +470,7 @@ class TestSlidingWindowUsageStats:
     async def test_usage_weight_range(self, clean_limiter):
         """Test that usage weight is in valid range."""
         limiter = clean_limiter
-        key = f"sliding-weight-range-{datetime.utcnow().isoformat()}"
+        key = f"sliding-weight-range-{uuid4().hex}"
         rate = "10/second"
 
         await limiter.check(key=key, rate=rate, algorithm="sliding_window")

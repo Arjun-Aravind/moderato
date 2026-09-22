@@ -10,7 +10,7 @@ These tests validate that:
 
 import asyncio
 import time
-from datetime import datetime
+from uuid import uuid4
 
 import pytest
 
@@ -28,7 +28,7 @@ class TestFixedWindowConcurrency:
         With 50 limit and 200 concurrent requests, exactly 50 should be allowed.
         """
         limiter = clean_limiter
-        key = f"fw-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"fw-concurrent-{uuid4().hex}"
         # Minute window: a 1-second window could expire mid-burst and over-allow
         rate = "50/hour"
 
@@ -51,7 +51,7 @@ class TestFixedWindowConcurrency:
     async def test_high_concurrency_500_requests(self, clean_limiter):
         """Test with 500 concurrent requests."""
         limiter = clean_limiter
-        key = f"fw-high-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"fw-high-concurrent-{uuid4().hex}"
         rate = "100/hour"
 
         async def make_request():
@@ -69,7 +69,7 @@ class TestFixedWindowConcurrency:
     async def test_concurrent_with_cost(self, clean_limiter):
         """Test concurrent requests with varying costs."""
         limiter = clean_limiter
-        key = f"fw-cost-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"fw-cost-concurrent-{uuid4().hex}"
         rate = "100/hour"
 
         async def make_request(cost: int):
@@ -94,7 +94,7 @@ class TestTokenBucketConcurrency:
     async def test_concurrent_token_bucket_exact(self, clean_limiter):
         """Test that token bucket enforces exact capacity under concurrency."""
         limiter = clean_limiter
-        key = f"tb-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"tb-concurrent-{uuid4().hex}"
         # Slow refill (minute window) keeps refill during the burst negligible
         rate = "20/hour"
 
@@ -115,7 +115,7 @@ class TestTokenBucketConcurrency:
     async def test_token_bucket_refill_under_load(self, clean_limiter):
         """Test token bucket refill while under concurrent load."""
         limiter = clean_limiter
-        key = f"tb-refill-load-{datetime.utcnow().isoformat()}"
+        key = f"tb-refill-load-{uuid4().hex}"
         rate = "10/second"
 
         # First burst - use all tokens
@@ -157,7 +157,7 @@ class TestSlidingWindowConcurrency:
     async def test_concurrent_sliding_window_exact(self, clean_limiter):
         """Test sliding window atomic enforcement under concurrency."""
         limiter = clean_limiter
-        key = f"sw-concurrent-{datetime.utcnow().isoformat()}"
+        key = f"sw-concurrent-{uuid4().hex}"
         rate = "30/hour"
 
         async def make_request():
@@ -185,7 +185,7 @@ class TestRaceConditions:
         Even without explicit concurrency, rapid requests can race.
         """
         limiter = clean_limiter
-        key = f"race-rapid-{datetime.utcnow().isoformat()}"
+        key = f"race-rapid-{uuid4().hex}"
         rate = "10/hour"
 
         # Launch requests with minimal delay
@@ -206,7 +206,7 @@ class TestRaceConditions:
     async def test_check_with_info_atomic(self, clean_limiter):
         """Test that check_with_info is also atomic under concurrency."""
         limiter = clean_limiter
-        key = f"race-info-{datetime.utcnow().isoformat()}"
+        key = f"race-info-{uuid4().hex}"
         rate = "25/hour"
 
         async def make_request():
@@ -235,7 +235,7 @@ class TestDistributedClockConsistency:
         may have clock skew.
         """
         limiter = clean_limiter
-        key = f"clock-test-{datetime.utcnow().isoformat()}"
+        key = f"clock-test-{uuid4().hex}"
         rate = "10/second"
 
         # Make requests - the key is that it doesn't crash
@@ -247,7 +247,7 @@ class TestDistributedClockConsistency:
     async def test_window_alignment_uses_redis_time(self, clean_limiter):
         """Test that window alignment is based on Redis time."""
         limiter = clean_limiter
-        key = f"window-align-{datetime.utcnow().isoformat()}"
+        key = f"window-align-{uuid4().hex}"
         rate = "10/minute"
 
         # In the final second of a window, Redis truncates TTL to 0 and a
@@ -362,7 +362,7 @@ class TestEdgeCaseConcurrency:
     async def test_cost_equals_limit_concurrent(self, clean_limiter):
         """Test concurrent requests where cost equals limit."""
         limiter = clean_limiter
-        key = f"cost-limit-{datetime.utcnow().isoformat()}"
+        key = f"cost-limit-{uuid4().hex}"
         rate = "10/hour"
 
         async def make_request():
@@ -382,7 +382,7 @@ class TestEdgeCaseConcurrency:
     async def test_concurrent_reset_and_check(self, clean_limiter):
         """Test concurrent reset and check operations."""
         limiter = clean_limiter
-        key = f"reset-check-{datetime.utcnow().isoformat()}"
+        key = f"reset-check-{uuid4().hex}"
         rate = "5/second"
 
         # Use up limit
@@ -415,7 +415,7 @@ class TestHighLoadConcurrency:
     async def test_1000_concurrent_requests(self, clean_limiter):
         """Test with 1000 concurrent requests."""
         limiter = clean_limiter
-        key = f"high-load-{datetime.utcnow().isoformat()}"
+        key = f"high-load-{uuid4().hex}"
         rate = "100/hour"
 
         async def make_request():
@@ -433,7 +433,7 @@ class TestHighLoadConcurrency:
     async def test_sustained_high_load(self, clean_limiter):
         """Test sustained high load over multiple seconds."""
         limiter = clean_limiter
-        key = f"sustained-{datetime.utcnow().isoformat()}"
+        key = f"sustained-{uuid4().hex}"
         # Minute window: per-second windows let each 100-request round
         # straddle a boundary and double-allow on slow CI runners, which
         # makes wall-time-based assertions unsound.

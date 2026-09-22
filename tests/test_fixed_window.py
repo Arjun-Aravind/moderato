@@ -3,7 +3,7 @@ Tests for Fixed Window rate limiting algorithm.
 """
 
 import asyncio
-from datetime import datetime
+from uuid import uuid4
 
 import pytest
 
@@ -40,7 +40,7 @@ class TestFixedWindow:
     async def test_burst_behavior(self, clean_limiter):
         """Test handling of burst requests."""
         limiter = clean_limiter
-        key = f"burst-test-{datetime.utcnow().isoformat()}"
+        key = f"burst-test-{uuid4().hex}"
         # Hour window: a 1-second window can expire mid-burst on slow CI
         # runners and over-allow; an hour cannot.
         rate = "50/hour"
@@ -63,7 +63,7 @@ class TestFixedWindow:
     async def test_window_reset(self, clean_limiter):
         """Test that rate limit resets after window expires."""
         limiter = clean_limiter
-        key = f"window-test-{datetime.utcnow().isoformat()}"
+        key = f"window-test-{uuid4().hex}"
         rate = "3/second"
 
         # Start just after a window boundary so the fill below cannot

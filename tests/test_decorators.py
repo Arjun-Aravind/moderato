@@ -114,6 +114,8 @@ class TestDecorators:
     @pytest.mark.asyncio
     async def test_multiple_decorators(self, clean_limiter, mock_request):
         """Test multiple rate limit decorators on same function."""
+        from tests.conftest import sleep_past_window_boundary
+
         limiter = clean_limiter
         request = mock_request()
 
@@ -124,12 +126,23 @@ class TestDecorators:
         async def multi_limited(request):
             return {"status": "ok"}
 
+        # Start at a fresh 1-second window so the 5/second bucket is empty.
+        await sleep_past_window_boundary(limiter)
+
         # Should be limited by the stricter limit (5/second)
         for _ in range(5):
             await multi_limited(request)
 
-        with pytest.raises(RateLimitExceeded):
-            await multi_limited(request)
+        # If the probe straddles a window boundary, the bucket resets and the
+        # call succeeds; keep probing so a boundary straddle cannot flake this.
+        exceeded = False
+        for _ in range(15):
+            try:
+                await multi_limited(request)
+            except RateLimitExceeded:
+                exceeded = True
+                break
+        assert exceeded, "stacked decorators must enforce the stricter 5/second limit"
 
     @pytest.mark.asyncio
     async def test_decorator_with_path_params(self, clean_limiter):

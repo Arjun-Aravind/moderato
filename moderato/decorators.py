@@ -30,8 +30,8 @@ def create_limit_decorator(
     tenant_func: Optional[TenantFunc] = None,
     algorithm: Optional[str] = None,
     cost_func: Optional[CostFunc] = None,
-    scope: Optional[str] = None,
     trust_proxy_headers: bool = False,
+    scope: Optional[str] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """
     Create a rate limit decorator for async functions.
@@ -47,6 +47,7 @@ def create_limit_decorator(
         tenant_func: Optional function to extract tenant type from request
         algorithm: Algorithm to use for rate limiting
         cost_func: Optional function to calculate request cost
+        trust_proxy_headers: Whether to trust forwarded client IP headers
         scope: Shared bucket name. Defaults to the request method and route.
 
     Returns:
@@ -254,7 +255,9 @@ def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
     route_path = getattr(route, "path", None)
     if route_path:
         return f"{method}:{route_path}"
-    return f"{method}:{func.__module__}.{func.__qualname__}"
+    module = getattr(func, "__module__", func.__class__.__module__)
+    name = getattr(func, "__qualname__", func.__class__.__qualname__)
+    return f"{method}:{module}.{name}"
 
 
 def _get_default_key(request: Any, trust_proxy_headers: bool = False) -> str:
@@ -387,7 +390,7 @@ class RateLimitMiddleware:
             await self.limiter.check(
                 key=_get_default_key(request, trust_proxy_headers=self.trust_proxy_headers),
                 rate=self.default_rate,
-                scope=f"{scope.get('method', '*')}:{path}",
+                scope="middleware",
             )
         except RateLimitExceeded as e:
             # Send 429 response

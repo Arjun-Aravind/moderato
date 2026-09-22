@@ -14,6 +14,7 @@ import pytest
 
 from moderato import BackendError, RateLimitConfigError, RateLimiter, RateLimitExceeded
 from moderato.decorators import RateLimitMiddleware, _get_default_key
+from moderato.limiter import _suffix_matches_algorithm
 from moderato.utils import generate_key
 
 
@@ -676,6 +677,18 @@ class TestPolicyIsolation:
             await limiter.check(key="zero-rate", rate="0/minute")
         await limiter.close()
 
+    def test_reset_classifier_requires_known_key_shapes(self):
+        assert _suffix_matches_algorithm("global:p100x60:bucket", "token_bucket")
+        assert _suffix_matches_algorithm(
+            "default:global:p100x60:bucket", "token_bucket", has_tenant_prefix=True
+        )
+        assert not _suffix_matches_algorithm("extra:global:p100x60:bucket", "token_bucket")
+        assert not _suffix_matches_algorithm(
+            "default:extra:global:p100x60:bucket",
+            "token_bucket",
+            has_tenant_prefix=True,
+        )
+
     @pytest.mark.asyncio
     async def test_long_identifier_can_be_reset(self, clean_limiter):
         key = "user-" + "x" * 300
@@ -706,7 +719,7 @@ class TestLuaCostGuard:
         return int(time.time()) + seconds
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
     async def test_fixed_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-fixed-{uuid4().hex}"
         window_end = self._future_ts(60)
@@ -719,7 +732,7 @@ class TestLuaCostGuard:
         assert result.remaining == 2000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
     async def test_token_bucket_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-token-{uuid4().hex}"
         with pytest.raises(BackendError):
@@ -734,7 +747,7 @@ class TestLuaCostGuard:
         assert result.remaining == 4000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
     async def test_sliding_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
         current_key = f"lua-slide-cur-{uuid4().hex}"
         previous_key = f"lua-slide-prev-{uuid4().hex}"
@@ -751,14 +764,14 @@ class TestLuaCostGuard:
         assert result.remaining == 2000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
     async def test_fixed_window_fallback_rejects_invalid_cost(self, redis_client, invalid_cost):
         import time
 
         from moderato.backends.redis import FIXED_WINDOW_FALLBACK_SCRIPT
 
         key = f"lua-fallback-{uuid4().hex}"
-        with pytest.raises(Exception, match="cost must be positive"):
+        with pytest.raises(Exception, match="cost must be a positive integer"):
             await redis_client.eval(
                 FIXED_WINDOW_FALLBACK_SCRIPT,
                 1,

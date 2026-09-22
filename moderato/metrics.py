@@ -372,7 +372,6 @@ def metrics_decorator(
 
 # Global metrics instance (can be configured via RateLimiter)
 _global_metrics: Optional[RateLimitMetrics] = None
-_metrics_instances: dict[tuple[str, bool], RateLimitMetrics] = {}
 
 
 def get_metrics() -> Optional[RateLimitMetrics]:
@@ -397,10 +396,10 @@ def init_metrics(namespace: str = "moderato", enabled: bool = True) -> RateLimit
         Initialized metrics collector
     """
     global _global_metrics
-    key = (namespace, enabled)
-    metrics = _metrics_instances.get(key)
-    if metrics is None:
-        metrics = RateLimitMetrics(namespace=namespace, enabled=enabled)
-        _metrics_instances[key] = metrics
-    _global_metrics = metrics
-    return metrics
+    if not enabled:
+        return RateLimitMetrics(namespace=namespace, enabled=False)
+    if _global_metrics is None:
+        _global_metrics = RateLimitMetrics(namespace=namespace, enabled=True)
+    elif _global_metrics.namespace != namespace:
+        raise ValueError("metrics are already initialized with a different namespace")
+    return _global_metrics

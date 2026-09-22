@@ -17,6 +17,8 @@ import pytest
 from moderato import RateLimiter, RateLimitExceeded
 from moderato.exceptions import RateLimitConfigError
 from moderato.models import CheckResult
+from moderato.utils import _url_encode_key_component
+from tests.conftest import raw_key_ttl
 
 
 @pytest.mark.asyncio
@@ -324,15 +326,12 @@ class TestAlgorithmAwareGetUsage:
         # get_usage maps Redis TTL -1 (no expiry) and -2 (missing key) to 0,
         # so the range above alone cannot catch a dropped EXPIREAT: assert on
         # the raw key TTL instead.
-
-        async def raw_ttl(key_pattern: str) -> int:
-            key = None
-            async for found in limiter.backend.iter_keys(key_pattern):
-                key = found
-            assert key is not None, f"no keys found for {key_pattern}"
-            return await limiter.backend._redis.ttl(key)
-
-        assert await raw_ttl(f"{limiter.config.key_prefix}:*") >= 0
+        assert (
+            await raw_key_ttl(
+                limiter.backend, f"{limiter.config.key_prefix}:{_url_encode_key_component(key)}:*"
+            )
+            >= 0
+        )
 
     async def test_get_usage_token_bucket(self, clean_limiter):
         """Test get_usage with token_bucket algorithm."""

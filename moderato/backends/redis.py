@@ -28,7 +28,7 @@ class RateLimitResult(NamedTuple):
 # Inline fallback for the fixed window script, used only when
 # moderato/scripts/fixed_window.lua is unavailable (e.g. a broken install).
 # NOTE: This must stay in sync with scripts/fixed_window.lua, including the
-# negative-cost guard; tests/test_security.py executes both against Redis.
+# positive-cost guard; tests/test_security.py executes both against Redis.
 FIXED_WINDOW_FALLBACK_SCRIPT = """
 local key = KEYS[1]
 local max_requests = tonumber(ARGV[1])
@@ -36,9 +36,9 @@ local window_seconds = tonumber(ARGV[2])
 local window_end = tonumber(ARGV[3])
 local cost = tonumber(ARGV[4]) or 1000
 
--- Defense in depth: a negative cost would restore capacity
-if cost < 0 then
-    return redis.error_reply("cost must be non-negative")
+-- Defense in depth: request cost must consume capacity
+if cost <= 0 then
+    return redis.error_reply("cost must be positive")
 end
 
 local current = redis.call('INCRBY', key, cost)
@@ -178,7 +178,7 @@ class RedisBackend:
     async def close(self) -> None:
         """Close Redis connection gracefully."""
         if self._redis and self._connected:
-            await self._redis.close()
+            await self._redis.aclose()  # type: ignore[attr-defined]
             self._connected = False
             logger.info("Closed Redis connection")
 

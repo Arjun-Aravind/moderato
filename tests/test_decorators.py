@@ -32,6 +32,41 @@ class TestDecorators:
             await my_endpoint(request)
 
     @pytest.mark.asyncio
+    async def test_routes_have_independent_default_scopes(self, clean_limiter, mock_request):
+        request = mock_request()
+
+        @clean_limiter.limit("2/minute")
+        async def route_a(request):
+            return "a"
+
+        @clean_limiter.limit("2/minute")
+        async def route_b(request):
+            return "b"
+
+        assert await route_a(request) == "a"
+        assert await route_a(request) == "a"
+        with pytest.raises(RateLimitExceeded):
+            await route_a(request)
+        assert await route_b(request) == "b"
+
+    @pytest.mark.asyncio
+    async def test_explicit_scope_shares_a_bucket(self, clean_limiter, mock_request):
+        request = mock_request()
+
+        @clean_limiter.limit("2/minute", scope="shared-api")
+        async def route_a(request):
+            return "a"
+
+        @clean_limiter.limit("2/minute", scope="shared-api")
+        async def route_b(request):
+            return "b"
+
+        assert await route_a(request) == "a"
+        assert await route_b(request) == "b"
+        with pytest.raises(RateLimitExceeded):
+            await route_a(request)
+
+    @pytest.mark.asyncio
     async def test_custom_key_function(self, clean_limiter, make_request):
         """Test decorator with custom key extraction."""
         limiter = clean_limiter

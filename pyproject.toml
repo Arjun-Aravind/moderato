@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "moderato"
 version = "0.3.0"
-description = "Production-ready rate limiting library for Python with Redis backend"
+description = "Async Redis-backed rate limiting library for Python"
 authors = ["Arjun Aravind <arjunaravind748@gmail.com>"]
 readme = "README.md"
 packages = [{include = "moderato"}]
@@ -20,13 +20,14 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 homepage = "https://github.com/Arjun-Aravind/moderato"
 repository = "https://github.com/Arjun-Aravind/moderato"
 documentation = "https://github.com/Arjun-Aravind/moderato#readme"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.9,<3.14"
 redis = "^5.0.0"
 pydantic = "^2.0"
 typing-extensions = ">=4.0"
@@ -120,6 +121,7 @@ source = ["moderato"]
 omit = ["*/tests/*", "*/examples/*", "*/benchmarks/*"]
 
 [tool.coverage.report]
+fail_under = 65
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

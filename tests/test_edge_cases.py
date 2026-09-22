@@ -52,18 +52,12 @@ class TestInputValidation:
             # Should have informative error message
             assert exc_info.value is not None
 
-    async def test_zero_cost_handled(self, clean_limiter):
-        """Test that cost=0 is handled gracefully."""
-        limiter = clean_limiter
-        key = f"zero-cost-{datetime.utcnow().isoformat()}"
-
-        # cost=0 should work but not consume any tokens
-        result = await limiter.check(key=key, rate="10/minute", cost=0)
-        assert result is True
-
-        # Usage should show 0 consumed
-        usage = await limiter.get_usage(key=key, rate="10/minute")
-        assert usage["current"] == 0
+    @pytest.mark.parametrize("cost", [0, -1, True, 0.5, float("nan"), float("inf"), "1"])
+    async def test_invalid_cost_rejected(self, redis_url, cost):
+        limiter = RateLimiter(redis_url=redis_url)
+        with pytest.raises(RateLimitConfigError, match="positive integer"):
+            await limiter.check(key="invalid-cost", rate="10/minute", cost=cost)
+        assert not limiter._connected
 
     async def test_very_high_cost(self, clean_limiter):
         """Test that very high cost is handled correctly."""

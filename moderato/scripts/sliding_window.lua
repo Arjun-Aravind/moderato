@@ -29,9 +29,9 @@ local window_seconds = tonumber(ARGV[2])
 local current_timestamp = tonumber(ARGV[3])
 local cost = tonumber(ARGV[4]) or 1000  -- Default to 1000 (cost=1) if not provided
 
--- Defense in depth: a negative cost would restore capacity
-if cost < 0 then
-    return redis.error_reply("cost must be non-negative")
+-- Defense in depth: request cost must consume capacity
+if cost <= 0 then
+    return redis.error_reply("cost must be positive")
 end
 
 -- Get counts from both windows

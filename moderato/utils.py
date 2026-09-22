@@ -11,6 +11,7 @@ from typing import Optional
 # hex digest and a 1-char separator.
 HASH_KEY_MAX_LENGTH = 200
 HASH_KEY_PRESERVED_LEN = HASH_KEY_MAX_LENGTH - 64 - 1
+KEY_COMPONENT_MAX_LENGTH = 100
 
 
 def parse_rate(rate_string: str) -> tuple[int, int]:
@@ -101,6 +102,7 @@ def generate_key(
     tenant_type: str,
     policy: str,
     time_window: str,
+    scope: str = "global",
 ) -> str:
     """
     Generate Redis key for rate limiting.
@@ -121,25 +123,30 @@ def generate_key(
             buckets for different policies so the same identity under
             different rates never shares state.
         time_window: Time window identifier (e.g., "1700000100")
+        scope: Namespace for independently limited resources
 
     Returns:
         Formatted Redis key
 
     Examples:
         >>> generate_key("ratelimit", "192.168.1.1", "free", "p100x60", "1700000100")
-        'ratelimit:192.168.1.1:free:p100x60:1700000100'
+        'ratelimit:192.168.1.1:free:global:p100x60:1700000100'
 
         >>> generate_key("ratelimit", "user:123", "premium", "p50x60", "1700000100")
-        'ratelimit:user%3A123:premium:p50x60:1700000100'  # Colon encoded to prevent collision
+        'ratelimit:user%3A123:premium:global:p50x60:1700000100'
     """
-    # Use URL-safe encoding for identifier and tenant_type
-    # This prevents collisions: "a:b" != "a_b" after encoding
-    safe_id = _url_encode_key_component(identifier)
-    safe_tenant = _url_encode_key_component(tenant_type)
+    safe_id = normalize_key_component(identifier)
+    safe_tenant = normalize_key_component(tenant_type)
+    safe_scope = normalize_key_component(scope)
+    return f"{prefix}:{safe_id}:{safe_tenant}:{safe_scope}:{policy}:{time_window}"
 
-    # Generate the key and apply hash optimization for long keys
-    full_key = f"{prefix}:{safe_id}:{safe_tenant}:{policy}:{time_window}"
-    return hash_key(full_key, max_length=200)
+
+def normalize_key_component(value: str) -> str:
+    """Encode a Redis key component, hashing it when it is unusually long."""
+    encoded = _url_encode_key_component(value)
+    if len(encoded) <= KEY_COMPONENT_MAX_LENGTH:
+        return encoded
+    return f"sha256={hashlib.sha256(encoded.encode()).hexdigest()}"
 
 
 def _url_encode_key_component(value: str) -> str:

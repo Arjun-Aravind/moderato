@@ -61,7 +61,7 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis, None]:
 
     # Clean up after test
     await client.flushdb()
-    await client.close()
+    await client.aclose()
 
 
 @pytest.fixture

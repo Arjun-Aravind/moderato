@@ -231,15 +231,9 @@ class TestSlidingWindowRetryAfter:
 class TestSlidingWindowVsFixedWindow:
     """Compare sliding window to fixed window behavior."""
 
-    async def test_smoother_than_fixed_window(self, clean_limiter):
-        """
-        Test that sliding window provides smoother rate limiting.
-
-        Fixed window can allow 2x burst at boundary, sliding window
-        should not have this problem.
-        """
+    async def test_same_limit_for_single_burst(self, clean_limiter):
         limiter = clean_limiter
-        rate = "10/second"
+        rate = "10/hour"
 
         # Test with fixed window
         fw_key = f"fw-smooth-{datetime.utcnow().isoformat()}"

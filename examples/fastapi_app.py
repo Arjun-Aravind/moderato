@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import RateLimitCallbackError, RateLimiter, RateLimitExceeded  # noqa: E402
 
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 limiter = RateLimiter(redis_url=redis_url)
@@ -66,6 +66,11 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
             "Retry-After": str(exc.retry_after),
         },
     )
+
+
+@app.exception_handler(RateLimitCallbackError)
+async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackError):
+    return JSONResponse(status_code=503, content={"error": "rate limit callback failed"})
 
 
 @app.get("/")

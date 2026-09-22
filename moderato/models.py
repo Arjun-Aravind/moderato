@@ -3,7 +3,7 @@ Pydantic models for configuration and data structures.
 """
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,7 +20,9 @@ class CheckResult:
         allowed: Whether the request was allowed
         limit: Maximum requests allowed in the window
         remaining: Requests remaining in the current window
-        retry_after: Seconds until the rate limit resets (0 if allowed)
+        retry_after: Whole seconds to wait before retrying (0 if allowed)
+        reset_at: Unix timestamp, from the Redis-backed decision, for the
+            next capacity reset
         window_seconds: Size of the rate limit window in seconds
 
     Example:
@@ -34,6 +36,7 @@ class CheckResult:
     remaining: int
     retry_after: int  # seconds (0 if allowed)
     window_seconds: int
+    reset_at: Optional[int] = None  # Unix timestamp in seconds
 
 
 class RateLimitConfig(BaseModel):

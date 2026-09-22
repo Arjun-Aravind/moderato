@@ -8,7 +8,7 @@
 -- ARGV[4] = current_time_ms (current timestamp in milliseconds)
 -- ARGV[5] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
 --
--- Returns: {allowed (1 or 0), remaining, retry_after_ms}
+-- Returns: {allowed (1 or 0), remaining, retry_after_ms, reset_at}
 --
 -- Token Bucket Algorithm:
 -- - Tokens are continuously added at refill_rate
@@ -105,5 +105,13 @@ end
 -- Return results
 -- allowed: 1 if request should proceed, 0 if rate limited
 -- remaining: number of tokens remaining in bucket (with multiplier)
+-- reset_at is when the bucket is full again. Both values are based on the
+-- Redis TIME value supplied by the caller, never the application clock.
+local full_refill_after_ms = 0
+if new_tokens < max_tokens and refill_rate_per_second > 0 then
+    full_refill_after_ms = math.ceil(((max_tokens - new_tokens) * 1000) / refill_rate_per_second)
+end
+local reset_at = math.ceil((current_time_ms + full_refill_after_ms) / 1000)
+
 -- retry_after_ms: milliseconds until enough tokens available (0 if allowed)
-return {allowed, remaining, retry_after_ms}
+return {allowed, remaining, retry_after_ms, reset_at}

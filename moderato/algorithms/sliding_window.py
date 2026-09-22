@@ -101,8 +101,8 @@ class SlidingWindow(RateLimitAlgorithm):
               - Previous window: ratelimit:user:default:14:34
               - Weight: 0.5 (30 seconds into current window)
         """
-        # Get current timestamp
-        current_time = int(time.time())
+        current_time, redis_time_us = await self.backend.get_redis_time()
+        current_time_ms = current_time * 1000 + redis_time_us // 1000
 
         # Calculate current window start time
         window_start = current_time - (current_time % window_seconds)
@@ -121,7 +121,7 @@ class SlidingWindow(RateLimitAlgorithm):
             previous_key=previous_key,
             max_requests=max_requests,
             window_seconds=window_seconds,
-            current_time=current_time,
+            current_time_ms=current_time_ms,
             cost=cost,
         )
 

@@ -249,7 +249,8 @@ class RateLimiter:
             ... )
             True
         """
-        # Use check_with_info internally and just return the allowed status
+        # Keep check() as the enforcing API; check_with_info() always returns
+        # the decision for callers that need usage and response metadata.
         result = await self.check_with_info(
             key=key,
             rate=rate,
@@ -258,6 +259,13 @@ class RateLimiter:
             cost=cost,
             scope=scope,
         )
+        if not result.allowed:
+            raise RateLimitExceeded(
+                retry_after=result.retry_after,
+                limit=rate,
+                remaining=result.remaining,
+                reset_at=result.reset_at,
+            )
         return result.allowed
 
     async def check_with_info(
@@ -273,7 +281,8 @@ class RateLimiter:
         Check if a request is allowed and return detailed rate limit info.
 
         This method is similar to check() but returns a CheckResult with
-        full rate limit information instead of just True/raising an exception.
+        full rate limit information, including denied decisions, instead of
+        enforcing the limit by raising an exception.
         This is more efficient when you need usage info (e.g., for headers)
         because it avoids a second Redis call.
 
@@ -286,10 +295,9 @@ class RateLimiter:
             scope: Namespace for independently limited resources (default "global")
 
         Returns:
-            CheckResult with usage information when the request is allowed
+            CheckResult with usage information for an allowed or denied request
 
         Raises:
-            RateLimitExceeded: If rate limit is exceeded
             RateLimitConfigError: If configuration is invalid
             BackendError: If backend operation fails
 
@@ -386,6 +394,7 @@ class RateLimiter:
                 scope=scope,
             )
             current_time = redis_time_seconds
+            current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
             window_start = current_time - (current_time % window_seconds)
             previous_window_start = window_start - window_seconds
 
@@ -396,7 +405,7 @@ class RateLimiter:
                     previous_key=f"{base_key}:{previous_window_start}",
                     max_requests=max_requests,
                     window_seconds=window_seconds,
-                    current_time=current_time,
+                    current_time_ms=current_time_ms,
                     cost=cost_with_multiplier,
                 ),
             )
@@ -420,18 +429,14 @@ class RateLimiter:
             limit=requests,
             remaining=remaining_requests,
             retry_after=retry_after_seconds,
+            reset_at=result.reset_at,
             window_seconds=window_seconds,
         )
 
-        # If not allowed, raise exception (for backward compatibility with check())
-        if not result.allowed:
-            raise RateLimitExceeded(
-                retry_after=retry_after_seconds,
-                limit=rate,
-                remaining=remaining_requests,
-            )
-
-        logger.debug(f"Rate limit check passed for key={key}, " f"remaining={remaining_requests}")
+        logger.debug(
+            f"Rate limit check {'passed' if result.allowed else 'denied'} for key={key}, "
+            f"remaining={remaining_requests}"
+        )
 
         return check_result
 

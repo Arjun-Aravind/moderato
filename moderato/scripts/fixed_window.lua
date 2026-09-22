@@ -7,7 +7,7 @@
 -- ARGV[3] = window_end_timestamp (epoch when this window expires)
 -- ARGV[4] = cost (e.g., 1000 for cost=1 with 1000x multiplier, default 1000)
 --
--- Returns: {allowed (1 or 0), remaining, retry_after_ms}
+-- Returns: {allowed (1 or 0), remaining, retry_after_ms, reset_at}
 
 local key = KEYS[1]
 local max_requests = tonumber(ARGV[1])
@@ -33,17 +33,17 @@ if current == cost then
     redis.call('EXPIREAT', key, window_end)
 end
 
--- Get TTL for retry_after calculation
-local ttl = redis.call('TTL', key)
+-- Get millisecond TTL so Retry-After can be rounded up accurately.
+local ttl = redis.call('PTTL', key)
 
 -- Handle edge cases where key might not have TTL set properly
 -- TTL = -1 means key has no expiration (shouldn't happen, but be safe)
 -- TTL = -2 means key doesn't exist
 -- NOTE: We do NOT reset TTL when ttl=0 (key about to expire) - that's valid behavior
 if ttl < 0 then
-    ttl = window_seconds
     -- Ensure expiration is set (in case EXPIREAT failed earlier)
     redis.call('EXPIREAT', key, window_end)
+    ttl = redis.call('PTTL', key)
 end
 
 -- Calculate if request is allowed
@@ -63,4 +63,5 @@ end
 -- allowed: 1 if request should proceed, 0 if rate limited
 -- remaining: number of requests remaining in current window (with multiplier)
 -- retry_after_ms: milliseconds until the current window resets
-return {allowed, remaining, ttl * 1000}
+-- reset_at: Redis-authoritative window boundary
+return {allowed, remaining, ttl, window_end}

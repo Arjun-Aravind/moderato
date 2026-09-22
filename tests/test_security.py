@@ -226,22 +226,25 @@ class TestProxyHeaderSecurity:
 
     def test_trust_proxy_headers_enabled(self, mock_request):
         """
-        Test that proxy headers are used when trusted and client.host is unavailable.
-
-        Note: The implementation uses client.host first if available.
-        Proxy headers are only used when client.host is not available.
+        Test that proxy headers take precedence over the direct client
+        address when trusted. Behind a reverse proxy, request.client.host
+        is the proxy itself, so it must not win when headers are trusted.
         """
-        # Create request without client host (simulating proxy scenario)
         request = mock_request(
-            client_host=None,  # No direct client IP
+            client_host="10.0.0.99",  # the proxy's own address
             headers={"X-Forwarded-For": "10.0.0.1, 10.0.0.2"},
         )
-        # Override client to have no host
-        request.client.host = None
 
-        # With trust_proxy_headers and no client.host, should use X-Forwarded-For
         key = _get_default_key(request, trust_proxy_headers=True)
         assert "10.0.0.1" in key
+        assert "10.0.0.99" not in key
+
+    def test_trusted_headers_fall_back_to_direct_ip(self, mock_request):
+        """Test that the direct client address is used when trusted headers are absent."""
+        request = mock_request(client_host="192.168.1.100", headers={})
+
+        key = _get_default_key(request, trust_proxy_headers=True)
+        assert "192.168.1.100" in key
 
     def test_real_ip_header_trusted(self, mock_request):
         """Test X-Real-IP header when trusted and no client.host."""

@@ -274,18 +274,16 @@ def _get_default_key(request: Any, trust_proxy_headers: bool = False) -> str:
 
     Args:
         request: Request object
-        trust_proxy_headers: If True, trust X-Forwarded-For and X-Real-IP headers.
-                            Only enable if behind a trusted reverse proxy.
+        trust_proxy_headers: If True, take the client IP from
+                            X-Forwarded-For / X-Real-IP headers, falling back
+                            to the direct client address. Only enable if behind
+                            a trusted reverse proxy.
 
     Returns:
         Rate limit key
     """
-    # Primary: use direct client IP (most secure)
-    # FastAPI/Starlette Request
-    if hasattr(request, "client") and request.client and request.client.host:
-        return f"ip:{request.client.host}"
-
-    # Secondary: check proxy headers only if explicitly trusted
+    # Behind a reverse proxy, the direct client address is the proxy itself,
+    # so trusted headers must win over request.client.host.
     if trust_proxy_headers and hasattr(request, "headers"):
         # X-Forwarded-For header (behind proxy)
         forwarded_for = request.headers.get("X-Forwarded-For")
@@ -299,6 +297,11 @@ def _get_default_key(request: Any, trust_proxy_headers: bool = False) -> str:
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
             return f"ip:{real_ip}"
+
+    # Direct client IP (most secure when not behind a proxy)
+    # FastAPI/Starlette Request
+    if hasattr(request, "client") and request.client and request.client.host:
+        return f"ip:{request.client.host}"
 
     # Fallback to a generic key
     logger.warning("Could not determine client IP, using fallback key")

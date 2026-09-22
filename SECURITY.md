@@ -29,7 +29,7 @@ You can expect an initial response within 7 days. Once a fix is released, the ad
 Moderato is infrastructure security tooling, so a few design decisions are worth knowing about when reporting:
 
 - Keys are built from user-supplied identifiers. Identifier components are normalized and hashed when they exceed 100 characters to keep keys bounded; the limiter never passes raw, unbounded user input into Redis key slots.
-- The default decorator scope is derived from the HTTP method and route path. Client-IP extraction from proxy headers (`X-Forwarded-For` and friends) is controlled by `trust_proxy_headers`: leave it `False` unless the application is behind a reverse proxy you control that overwrites these headers.
+- The default decorator scope is derived from the HTTP method and route path. Client-IP extraction from proxy headers (`X-Forwarded-For` and friends) is controlled by `trust_proxy_headers`: when enabled, these headers take precedence over the direct client address; leave it `False` unless the application is behind a reverse proxy you control that overwrites these headers.
 - Rate-limit checks and updates run through atomic Lua scripts that never execute user-supplied strings. Fixed-window and sliding-window accounting is integer-only; the token bucket accumulates fractional refills in floating point with millisecond precision. Administrative `reset()` deletes keys directly with `SCAN`/`DEL` and does not interleave with checks atomically.
 - Costs passed to `check()` are validated as strictly positive integers before any Redis call is made.
 

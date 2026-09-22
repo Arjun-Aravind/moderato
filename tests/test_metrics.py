@@ -19,8 +19,13 @@ def test_metrics_initialization_is_idempotent():
 def test_limiter_reuses_initialized_namespace(monkeypatch):
     monkeypatch.setattr(metrics_module, "_global_metrics", None)
     metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
-    limiter = RateLimiter(enable_metrics=True)
-    assert limiter.metrics is metrics
+    try:
+        limiter = RateLimiter(enable_metrics=True)
+        assert limiter.metrics is metrics
+    finally:
+        for collector in vars(metrics).values():
+            if hasattr(collector, "collect"):
+                REGISTRY.unregister(collector)
 
 
 @pytest.mark.asyncio

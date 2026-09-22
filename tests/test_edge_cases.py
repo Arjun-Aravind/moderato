@@ -318,9 +318,9 @@ class TestAlgorithmAwareGetUsage:
         assert usage["current"] == 25
         assert usage["limit"] == 100
         assert usage["remaining"] == 75
-        assert "ttl" in usage
-        assert usage["ttl"] > 0
-        assert usage["ttl"] <= 60
+        # TTL truncates to whole seconds, so a run landing in the final second
+        # of the window legitimately reports 0 while the bucket is still alive.
+        assert 0 <= usage["ttl"] <= 60
 
     async def test_get_usage_token_bucket(self, clean_limiter):
         """Test get_usage with token_bucket algorithm."""

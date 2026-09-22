@@ -7,7 +7,8 @@ with different limits for different customer tiers.
 
 import os
 import sys
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
@@ -18,14 +19,25 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 
+redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+limiter = RateLimiter(redis_url=redis_url)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await limiter.connect()
+    print("Connected to Redis")
+    print(f"Loaded {len(TENANT_DATABASE)} tenants")
+    yield
+    await limiter.close()
+
+
 app = FastAPI(
     title="Multi-Tenant API",
     description="Example of multi-tenant rate limiting with tiers",
     version="1.0.0",
+    lifespan=lifespan,
 )
-
-redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-limiter = RateLimiter(redis_url=redis_url)
 
 # Simulated tenant database
 TENANT_DATABASE = {
@@ -67,20 +79,6 @@ def get_tenant_info(api_key: str) -> tuple:
 
     tenant = TENANT_DATABASE[tenant_id]
     return tenant_id, tenant["tier"], tenant["name"]
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize rate limiter on startup."""
-    await limiter.connect()
-    print("Connected to Redis")
-    print(f"Loaded {len(TENANT_DATABASE)} tenants")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up on shutdown."""
-    await limiter.close()
 
 
 @app.exception_handler(RateLimitExceeded)
@@ -142,7 +140,7 @@ async def get_data(request: Request, x_api_key: str = Header(None)):
             {"id": 3, "value": "Sample data 3"},
         ],
         "rate_limit": limit,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -184,7 +182,7 @@ async def get_analytics(request: Request, x_api_key: str = Header(None)):
         "tier": tier,
         "analytics": analytics_data,
         "rate_limit": limit,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -202,11 +200,11 @@ async def export_data(request: Request, x_api_key: str = Header(None)):
     return {
         "tenant": tenant_name,
         "tier": tier,
-        "export_id": f"export-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+        "export_id": f"export-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
         "status": "initiated",
         "rate_limit": limit,
         "message": f"Export initiated. {tier.capitalize()} tier allows {limit}",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -248,7 +246,7 @@ async def check_usage(x_api_key: str = Header(None)):
         "tenant": tenant_name,
         "tier": tier,
         "usage": usage_data,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -278,7 +276,7 @@ async def upgrade_tier(
         "new_tier": new_tier,
         "new_limits": TIER_LIMITS[new_tier],
         "message": f"Tenant upgraded from {current_tier} to {new_tier}",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -300,7 +298,7 @@ async def list_tenants(x_admin_key: str = Header(None)):
             for tid, tdata in TENANT_DATABASE.items()
         ],
         "total": len(TENANT_DATABASE),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

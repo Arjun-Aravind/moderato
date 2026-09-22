@@ -9,7 +9,7 @@ import asyncio
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +41,7 @@ class RateLimitDemo:
         print("TEST: Fixed Window - Basic Behavior")
         print("=" * 60)
 
-        key = f"demo:fixed:basic:{datetime.utcnow().isoformat()}"
+        key = f"demo:fixed:basic:{datetime.now(timezone.utc).isoformat()}"
         rate = "5/second"
 
         print(f"Rate limit: {rate}")
@@ -77,7 +77,7 @@ class RateLimitDemo:
         print("TEST: Fixed Window - Burst Traffic")
         print("=" * 60)
 
-        key = f"demo:fixed:burst:{datetime.utcnow().isoformat()}"
+        key = f"demo:fixed:burst:{datetime.now(timezone.utc).isoformat()}"
         rate = "10/second"
 
         print(f"Rate limit: {rate}")
@@ -105,7 +105,7 @@ class RateLimitDemo:
         print("TEST: Multiple Time Windows")
         print("=" * 60)
 
-        key = f"demo:multi:{datetime.utcnow().isoformat()}"
+        key = f"demo:multi:{datetime.now(timezone.utc).isoformat()}"
 
         windows = [
             ("2/second", 2),
@@ -140,7 +140,7 @@ class RateLimitDemo:
         print("=" * 60)
 
         rate = "3/second"
-        base_key = f"demo:tenant:{datetime.utcnow().isoformat()}"
+        base_key = f"demo:tenant:{datetime.now(timezone.utc).isoformat()}"
 
         tenants = [
             ("tenant-a", "free"),
@@ -169,7 +169,7 @@ class RateLimitDemo:
         print("TEST: Cost-Based Rate Limiting")
         print("=" * 60)
 
-        key = f"demo:cost:{datetime.utcnow().isoformat()}"
+        key = f"demo:cost:{datetime.now(timezone.utc).isoformat()}"
         rate = "10/second"
 
         print(f"Rate limit: {rate}")
@@ -213,7 +213,7 @@ class RateLimitDemo:
         print(f"Testing performance with {iterations} requests...")
         print(f"Rate limit: {rate}\n")
 
-        key = f"demo:benchmark:{datetime.utcnow().isoformat()}"
+        key = f"demo:benchmark:{datetime.now(timezone.utc).isoformat()}"
         await self.limiter.check(key=key, rate=rate)
 
         # Sequential test

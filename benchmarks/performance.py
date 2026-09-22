@@ -20,7 +20,7 @@ import statistics
 # Add parent directory to path
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -202,7 +202,7 @@ class PerformanceBenchmark:
         ]
 
         for rate_str, expected_allowed, _window_seconds in test_cases:
-            key = f"accuracy:{rate_str}:{datetime.utcnow().isoformat()}"
+            key = f"accuracy:{rate_str}:{datetime.now(timezone.utc).isoformat()}"
 
             # Send requests rapidly
             allowed = 0
@@ -351,7 +351,7 @@ class PerformanceBenchmark:
         all_passed = True
 
         for algo, limit in test_cases:
-            test_key = f"accuracy-{algo}-{datetime.utcnow().isoformat()}"
+            test_key = f"accuracy-{algo}-{datetime.now(timezone.utc).isoformat()}"
             test_rate = f"{limit}/second"
             test_algo = algo
 

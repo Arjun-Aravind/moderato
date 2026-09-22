@@ -346,4 +346,4 @@ async def raw_key_ttl(backend, key_pattern: str) -> int:
     assert (
         len(matches) == 1
     ), f"expected exactly 1 key matching {key_pattern!r}, found {len(matches)}: {matches}"
-    return await backend._redis.ttl(matches[0])
+    return await backend.raw_ttl(matches[0])

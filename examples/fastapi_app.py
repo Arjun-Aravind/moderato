@@ -52,6 +52,13 @@ app.add_middleware(
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     """Global handler for rate limit exceeded exceptions."""
+    headers = {
+        "X-RateLimit-Limit": exc.limit,
+        "X-RateLimit-Remaining": str(exc.remaining),
+        "Retry-After": str(exc.retry_after),
+    }
+    if exc.reset_at is not None:
+        headers["X-RateLimit-Reset"] = str(exc.reset_at)
     return JSONResponse(
         status_code=429,
         content={
@@ -59,12 +66,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
             "message": str(exc),
             "retry_after": exc.retry_after,
         },
-        headers={
-            "X-RateLimit-Limit": exc.limit,
-            "X-RateLimit-Remaining": str(exc.remaining),
-            "X-RateLimit-Reset": str(exc.retry_after),
-            "Retry-After": str(exc.retry_after),
-        },
+        headers=headers,
     )
 
 

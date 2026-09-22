@@ -24,8 +24,9 @@ class RateLimitExceeded(RateLimitError):
         retry_after: int,
         limit: str,
         remaining: int = 0,
-        reset_at: Optional[int] = None,
         message: Optional[str] = None,
+        *,
+        reset_at: Optional[int] = None,
     ):
         """
         Initialize RateLimitExceeded exception.
@@ -34,8 +35,8 @@ class RateLimitExceeded(RateLimitError):
             retry_after: Seconds until the rate limit resets
             limit: The rate limit that was exceeded (e.g., "100/minute")
             remaining: Number of requests remaining in the current window
-            reset_at: Unix timestamp when a request may be retried, when known
             message: Optional custom error message
+            reset_at: Unix timestamp when a request may be retried, when known
         """
         self.retry_after = retry_after
         self.limit = limit

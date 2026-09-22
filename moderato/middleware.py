@@ -6,7 +6,7 @@ information on the request.
 """
 
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -176,61 +176,3 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
             headers["Retry-After"] = str(retry_after)
 
         return headers
-
-
-def inject_rate_limit_headers(
-    limit: int,
-    remaining: int,
-    window_seconds: int,
-    ttl: Optional[int] = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """
-    Decorator to inject rate limit information into request state.
-
-    This function is meant to be used internally by the limiter decorator
-    to pass rate limit information to the middleware.
-
-    Args:
-        limit: Maximum requests allowed
-        remaining: Requests remaining
-        window_seconds: Size of the time window
-        ttl: Time to live for the current window
-
-    Returns:
-        Decorator function
-
-    Example:
-        @inject_rate_limit_headers(limit=100, remaining=75, window_seconds=60)
-        async def my_endpoint():
-            return {"data": "..."}
-    """
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Execute the original function
-            result = await func(*args, **kwargs)
-
-            # Try to inject rate limit info into request state
-            # This requires the Request object to be in args or kwargs
-            request = None
-            for arg in args:
-                if isinstance(arg, Request):
-                    request = arg
-                    break
-
-            if request is None:
-                request = kwargs.get("request")
-
-            if request and hasattr(request, "state"):
-                request.state.rate_limit_info = {
-                    "limit": limit,
-                    "remaining": remaining,
-                    "window_seconds": window_seconds,
-                    "ttl": ttl or window_seconds,
-                }
-
-            return result
-
-        return wrapper
-
-    return decorator

@@ -401,16 +401,19 @@ class RateLimitMiddleware:
                 rate=self.default_rate,
                 scope="middleware",
             )
-            if result.allowed:
-                await self.app(scope, receive, send)
-                return
-            retry_after = result.retry_after
-            remaining = result.remaining
-            reset_at = result.reset_at
         except RateLimitExceeded as e:
-            retry_after = e.retry_after
-            remaining = e.remaining
-            reset_at = e.reset_at
+            result = None
+            denial: Optional[Any] = e
+        else:
+            denial = None if result.allowed else result
+
+        if denial is None:
+            await self.app(scope, receive, send)
+            return
+
+        retry_after = denial.retry_after
+        remaining = denial.remaining
+        reset_at = denial.reset_at
 
         # Send 429 response
         headers = [

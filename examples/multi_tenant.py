@@ -84,6 +84,13 @@ def get_tenant_info(api_key: str) -> tuple:
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     """Handle rate limit exceeded with tenant context."""
+    headers = {
+        "X-RateLimit-Limit": exc.limit,
+        "X-RateLimit-Remaining": str(exc.remaining),
+        "Retry-After": str(exc.retry_after),
+    }
+    if exc.reset_at is not None:
+        headers["X-RateLimit-Reset"] = str(exc.reset_at)
     return JSONResponse(
         status_code=429,
         content={
@@ -92,12 +99,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
             "retry_after": exc.retry_after,
             "upgrade_url": "https://example.com/pricing",
         },
-        headers={
-            "X-RateLimit-Limit": exc.limit,
-            "X-RateLimit-Remaining": str(exc.remaining),
-            "X-RateLimit-Reset": str(exc.retry_after),
-            "Retry-After": str(exc.retry_after),
-        },
+        headers=headers,
     )
 
 

@@ -44,6 +44,11 @@ if ttl < 0 then
     -- Ensure expiration is set (in case EXPIREAT failed earlier)
     redis.call('EXPIREAT', key, window_end)
     ttl = redis.call('PTTL', key)
+    -- EXPIREAT deletes keys whose time already passed; report an expired
+    -- window instead of negative metadata.
+    if ttl < 0 then
+        ttl = 0
+    end
 end
 
 -- Calculate if request is allowed

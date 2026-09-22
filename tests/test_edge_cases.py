@@ -10,6 +10,7 @@ These tests validate:
 """
 
 import asyncio
+import time
 from uuid import uuid4
 
 import pytest
@@ -270,7 +271,7 @@ class TestCheckWithInfo:
         assert result.allowed is False
         assert result.remaining == 0
         assert result.retry_after > 0
-        assert result.reset_at > 1_000_000_000
+        assert int(time.time()) - 60 < result.reset_at <= int(time.time()) + 60
 
     async def test_check_with_info_remaining_decrements(self, clean_limiter):
         """Test that remaining decrements with each request."""

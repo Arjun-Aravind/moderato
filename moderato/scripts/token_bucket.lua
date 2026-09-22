@@ -111,7 +111,7 @@ local full_refill_after_ms = 0
 if new_tokens < max_tokens and refill_rate_per_second > 0 then
     full_refill_after_ms = math.ceil(((max_tokens - new_tokens) * 1000) / refill_rate_per_second)
 end
-local reset_at = math.ceil((current_time_ms + full_refill_after_ms) / 1000)
+local reset_at = math.ceil((effective_refill_ms + full_refill_after_ms) / 1000)
 
 -- retry_after_ms: milliseconds until enough tokens available (0 if allowed)
 return {allowed, remaining, retry_after_ms, reset_at}

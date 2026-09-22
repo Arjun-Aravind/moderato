@@ -1,8 +1,6 @@
 """Tests for rate limiting decorators."""
 
-import asyncio
 import inspect
-import time
 
 import pytest
 
@@ -354,16 +352,18 @@ class TestDecorators:
     async def test_sync_function_wrapper_does_not_block_event_loop(
         self, clean_limiter, mock_request
     ):
+        import threading
+
+        loop_thread = threading.get_ident()
+        handler_thread = {}
+
         @clean_limiter.limit("5/minute")
         def sync_endpoint(request):
-            time.sleep(0.1)
+            handler_thread["ident"] = threading.get_ident()
             return "complete"
 
-        task = asyncio.create_task(sync_endpoint(mock_request()))
-        started = time.perf_counter()
-        await asyncio.sleep(0.01)
-        assert time.perf_counter() - started < 0.05
-        assert await task == "complete"
+        assert await sync_endpoint(mock_request()) == "complete"
+        assert handler_thread["ident"] != loop_thread
 
     @pytest.mark.asyncio
     async def test_algorithm_parameter(self, clean_limiter, mock_request):

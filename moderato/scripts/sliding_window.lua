@@ -27,10 +27,14 @@ local previous_key = KEYS[2]
 local max_requests = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
 local current_timestamp = tonumber(ARGV[3])
-local cost = tonumber(ARGV[4]) or 1000  -- Default to 1000 (cost=1) if not provided
+local cost_arg = ARGV[4]
+local cost = 1000
+if cost_arg then
+    cost = tonumber(cost_arg)
+end
 
 -- Defense in depth: request cost must consume capacity
-if cost <= 0 or cost ~= math.floor(cost) then
+if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
     return redis.error_reply("cost must be a positive integer")
 end
 

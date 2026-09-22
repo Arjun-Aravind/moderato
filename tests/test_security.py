@@ -719,7 +719,7 @@ class TestLuaCostGuard:
         return int(time.time()) + seconds
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
     async def test_fixed_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-fixed-{uuid4().hex}"
         window_end = self._future_ts(60)
@@ -732,7 +732,7 @@ class TestLuaCostGuard:
         assert result.remaining == 2000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
     async def test_token_bucket_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-token-{uuid4().hex}"
         with pytest.raises(BackendError):
@@ -747,7 +747,7 @@ class TestLuaCostGuard:
         assert result.remaining == 4000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
     async def test_sliding_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
         current_key = f"lua-slide-cur-{uuid4().hex}"
         previous_key = f"lua-slide-prev-{uuid4().hex}"
@@ -764,7 +764,7 @@ class TestLuaCostGuard:
         assert result.remaining == 2000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5])
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
     async def test_fixed_window_fallback_rejects_invalid_cost(self, redis_client, invalid_cost):
         import time
 

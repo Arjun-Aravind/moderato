@@ -121,7 +121,7 @@ class RateLimiter:
         self.metrics: Optional[Any] = None
         if enable_metrics:
             try:
-                from .metrics import init_metrics
+                from .metrics import get_metrics, init_metrics
             except ModuleNotFoundError as exc:
                 if exc.name is None or not (
                     exc.name == "prometheus_client" or exc.name.startswith("prometheus_client.")
@@ -131,7 +131,7 @@ class RateLimiter:
                     "Prometheus metrics require the 'metrics' extra: "
                     "pip install 'moderato[metrics]'"
                 ) from exc
-            self.metrics = init_metrics()
+            self.metrics = get_metrics() or init_metrics()
 
         redacted_config = self.config.model_copy(
             update={"redis_url": _redact_redis_url(self.config.redis_url)}

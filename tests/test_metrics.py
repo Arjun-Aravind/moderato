@@ -3,6 +3,7 @@ import uuid
 import pytest
 from prometheus_client import REGISTRY
 
+import moderato.metrics as metrics_module
 from moderato import BackendError, RateLimiter, RateLimitExceeded
 from moderato.metrics import init_metrics
 
@@ -13,6 +14,13 @@ def _sample(name, labels):
 
 def test_metrics_initialization_is_idempotent():
     assert init_metrics() is init_metrics()
+
+
+def test_limiter_reuses_initialized_namespace(monkeypatch):
+    monkeypatch.setattr(metrics_module, "_global_metrics", None)
+    metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
+    limiter = RateLimiter(enable_metrics=True)
+    assert limiter.metrics is metrics
 
 
 @pytest.mark.asyncio

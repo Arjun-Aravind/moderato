@@ -3,6 +3,8 @@
 *In musical notation, **moderato** means "at a moderate pace." Moderato enforces your API's tempo.*
 
 [![Python Version](https://img.shields.io/badge/python-3.9--3.13-blue)](https://www.python.org)
+[![PyPI](https://img.shields.io/pypi/v/moderato)](https://pypi.org/project/moderato/)
+[![CI](https://github.com/Arjun-Aravind/moderato/actions/workflows/ci.yml/badge.svg)](https://github.com/Arjun-Aravind/moderato/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Redis](https://img.shields.io/badge/redis-7%2B-red)](https://redis.io)
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)

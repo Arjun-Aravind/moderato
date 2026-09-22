@@ -36,12 +36,18 @@ class TestDecorators:
         class Route:
             path = "/items/{item_id}"
 
+        class OtherRoute:
+            path = "/items/{other_id}"
+
         get_request = mock_request()
         get_request.method = "GET"
         get_request.scope = {"method": "GET", "route": Route()}
         post_request = mock_request()
         post_request.method = "POST"
         post_request.scope = {"method": "POST", "route": Route()}
+        other_route_request = mock_request()
+        other_route_request.method = "GET"
+        other_route_request.scope = {"method": "GET", "route": OtherRoute()}
 
         @clean_limiter.limit("2/minute")
         async def endpoint(request):
@@ -52,6 +58,7 @@ class TestDecorators:
         with pytest.raises(RateLimitExceeded):
             await endpoint(get_request)
         assert await endpoint(post_request) == "POST"
+        assert await endpoint(other_route_request) == "GET"
 
     @pytest.mark.asyncio
     async def test_explicit_scope_shares_a_bucket(self, clean_limiter, mock_request):

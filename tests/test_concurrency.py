@@ -431,10 +431,12 @@ class TestHighLoadConcurrency:
         assert allowed == 100, f"Expected 100 allowed, got {allowed}"
 
     async def test_sustained_high_load(self, clean_limiter):
-        """Test sustained high load over multiple seconds."""
+        """Test repeated high-load bursts against the same limit."""
         limiter = clean_limiter
         key = f"sustained-{uuid4().hex}"
-        rate = "50/minute"
+        # An hour window cannot be crossed within the test runtime, so the
+        # allowed total is deterministic regardless of runner speed.
+        rate = "50/hour"
 
         total_allowed = 0
         total_denied = 0
@@ -455,10 +457,4 @@ class TestHighLoadConcurrency:
             total_allowed += allowed
             total_denied += denied
 
-        # Three back-to-back rounds finish well within a single minute
-        # window on any runner, so the count is exactly 50; one boundary
-        # crossing is tolerated for slow runners, and two cannot occur
-        # because that would require the run to span more than 60s.
-        assert (
-            50 <= total_allowed <= 100
-        ), f"Expected 50-100 allowed over sustained load, got {total_allowed}"
+        assert total_allowed == 50, f"Expected 50 allowed over sustained load, got {total_allowed}"

@@ -11,7 +11,14 @@ from typing import Any, Callable, Optional
 from .backends.redis import RedisBackend, _redact_redis_url
 from .exceptions import RateLimitConfigError, RateLimitExceeded
 from .models import CheckResult, RateLimitConfig
-from .utils import _url_encode_key_component, generate_key, get_time_window, parse_rate
+from .utils import (
+    HASH_KEY_PRESERVED_LEN,
+    _url_encode_key_component,
+    generate_key,
+    get_time_window,
+    parse_rate,
+    scan_literal_may_miss_hashed_keys,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,25 +39,27 @@ def _policy_component(requests: int, window_seconds: int) -> str:
     return f"p{requests}x{window_seconds}"
 
 
-def _suffix_matches_algorithm(suffix: str, algorithm: str) -> bool:
+def _suffix_matches_algorithm(suffix: str, algorithm: str, has_tenant_prefix: bool = False) -> bool:
     """Classify a rate limit key by the suffix after ``prefix:key``.
 
     Parsing only the suffix keeps tenant names (even one literally called
-    "sliding" or ending in "bucket") from affecting classification.
+    "sliding" or shaped like a policy, e.g. ``p100x60``) from affecting
+    classification: whether the suffix starts with a tenant is decided by
+    the caller (which knows the scan shape), never inferred from the
+    tenant's text.
 
-    ``suffix`` may start at the tenant component (from ``_reset_all_tenants``)
-    or at the policy component (from ``_reset_matching``); a leading component
-    that is not a policy (``p{limit}x{window}``) is treated as the tenant and
-    dropped.
+    ``suffix`` may start at the tenant component (from ``_reset_all_tenants``,
+    which passes ``has_tenant_prefix=True``) or at the policy component
+    (from ``_reset_matching``).
 
     Shapes (the policy component is ``p{limit}x{window}``):
-    - token bucket: "p100x60:bucket"
-    - sliding window: "p100x60:sliding:{window_start}"
-    - fixed window: "p100x60:{window_start}"
+    - token bucket: "{tenant}:p100x60:bucket" or "p100x60:bucket"
+    - sliding window: "...:p100x60:sliding:{window_start}"
+    - fixed window: "...:p100x60:{window_start}"
     """
     parts = suffix.split(":")
-    if parts and re.match(r"^p\d+x\d+$", parts[0]) is None:
-        parts = parts[1:]  # drop the tenant component
+    if has_tenant_prefix:
+        parts = parts[1:]  # the leading component is always the tenant
     if len(parts) < 2:
         return False
     policy_re = r"^p\d+x\d+$"
@@ -265,11 +274,8 @@ class RateLimiter:
             ... else:
             ...     print(f"Rate limited, retry after {result.retry_after}s")
         """
-        # Ensure we're connected
-        if not self._connected:
-            await self.connect()
-
-        # Parse rate limit
+        # Validate the request configuration before touching the backend so
+        # bad input raises RateLimitConfigError even without a Redis server.
         try:
             requests, window_seconds = parse_rate(rate)
         except ValueError as e:
@@ -283,6 +289,10 @@ class RateLimiter:
         algorithm = algorithm or self.config.default_algorithm
         if algorithm not in ["fixed_window", "token_bucket", "sliding_window"]:
             raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
+
+        # Ensure we're connected
+        if not self._connected:
+            await self.connect()
 
         tenant_type = tenant_type or "default"
         policy = _policy_component(requests, window_seconds)
@@ -501,9 +511,10 @@ class RateLimiter:
         Scans for keys shaped ``{prefix}:{encoded_key}:*`` which covers all
         tenant types, algorithms, and time windows in one pass. If an
         ``algorithm`` is given, only keys for that algorithm are deleted.
-        Note: keys longer than 200 chars are SHA-hashed (see utils.hash_key)
-        and cannot be matched by this scan; use reset(..., tenant_type=...)
-        with the exact tenant for those.
+        Note: keys longer than 200 chars are SHA-hashed (see utils.hash_key).
+        A scan still matches those unless ``prefix:identifier:`` alone exceeds
+        the hash-preserved prefix; when that cannot be ruled out, a warning is
+        logged because the reset may silently leave buckets in place.
         """
         if not self._connected:
             await self.connect()
@@ -523,10 +534,13 @@ class RateLimiter:
         # Everything after "{prefix}:{encoded_key}:" is "{tenant}:{suffix}"
         # (+1 skips the separator colon before the tenant)
         suffix_offset = len(self.config.key_prefix) + 1 + len(encoded_key) + 1
+        self._warn_if_scan_may_miss_hashed_keys(suffix_offset, key)
 
         # Stream keys and delete in batches so peak memory stays bounded
         check_algorithm = algorithm if algorithm not in (None, "all") else None
-        return await self._delete_matching(pattern, suffix_offset, check_algorithm)
+        return await self._delete_matching(
+            pattern, suffix_offset, check_algorithm, has_tenant_prefix=True
+        )
 
     async def _reset_matching(self, key: str, tenant_type: str, algorithm: Optional[str]) -> bool:
         """Reset rate limit keys for one tenant type of this key.
@@ -543,17 +557,35 @@ class RateLimiter:
         suffix_offset = (
             len(self.config.key_prefix) + 1 + len(encoded_key) + 1 + len(encoded_tenant) + 1
         )
+        self._warn_if_scan_may_miss_hashed_keys(suffix_offset, key)
         return await self._delete_matching(pattern, suffix_offset, algorithm)
 
+    @staticmethod
+    def _warn_if_scan_may_miss_hashed_keys(scan_literal_len: int, key: str) -> None:
+        """Warn when a reset scan may silently skip SHA-hashed Redis keys."""
+        if scan_literal_may_miss_hashed_keys(scan_literal_len):
+            logger.warning(
+                "reset(%r): the prefix and key are long enough that their Redis "
+                "keys may be SHA-hashed (utils.hash_key keeps only the first %d "
+                "characters), and SCAN patterns cannot match hashed keys - this "
+                "reset may leave buckets in place. Use a shorter key_prefix or key.",
+                key,
+                HASH_KEY_PRESERVED_LEN,
+            )
+
     async def _delete_matching(
-        self, pattern: str, suffix_offset: int, algorithm: Optional[str]
+        self,
+        pattern: str,
+        suffix_offset: int,
+        algorithm: Optional[str],
+        has_tenant_prefix: bool = False,
     ) -> bool:
         """Delete keys matching ``pattern`` whose suffix classifies as ``algorithm``."""
         deleted_any = False
         batch: list[str] = []
         async for full_key in self.backend.iter_keys(pattern):
             if algorithm is not None and not _suffix_matches_algorithm(
-                full_key[suffix_offset:], algorithm
+                full_key[suffix_offset:], algorithm, has_tenant_prefix
             ):
                 continue
             batch.append(full_key)

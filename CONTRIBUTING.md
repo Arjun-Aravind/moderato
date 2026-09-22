@@ -88,7 +88,19 @@ cd moderato
 git remote add upstream https://github.com/Arjun-Aravind/moderato.git
 ```
 
-### 2. Create Virtual Environment
+### 2. Install Poetry
+
+Dependency management uses [Poetry](https://python-poetry.org/). Install it
+before continuing (pipx is recommended):
+
+```bash
+pipx install poetry==1.8.3
+# or: pip install poetry==1.8.3
+```
+
+The project pins Poetry 1.8.3 (its lock file format matches that version).
+
+### 3. Create Virtual Environment
 
 ```bash
 # Create virtual environment
@@ -101,20 +113,22 @@ source venv/bin/activate
 venv\Scripts\activate
 ```
 
-### 3. Install Dependencies
+### 4. Install Dependencies
 
 ```bash
-# Install development dependencies
+# Install all dependencies
 poetry install
 
 # This installs:
 # - moderato package in editable mode
-# - Development tools (black, ruff, mypy)
-# - Testing tools (pytest, pytest-asyncio, pytest-cov)
-# - Optional dependencies (prometheus-client)
+# - Core dependencies (redis, pydantic, typing-extensions)
+# - Optional integration packages (starlette, fastapi, prometheus-client)
+# - Development tools (black, ruff, mypy, pre-commit)
+# - Testing tools (pytest, pytest-asyncio, pytest-cov, pytest-timeout)
+# - Examples group (uvicorn, httpx) and benchmarks group (locust, matplotlib)
 ```
 
-### 4. Start Redis
+### 5. Start Redis
 
 **Option A: Local Redis**
 ```bash
@@ -134,7 +148,7 @@ docker run -d -p 6379:6379 redis:7-alpine
 docker-compose up -d
 ```
 
-### 5. Verify Setup
+### 6. Verify Setup
 
 ```bash
 # Run tests to verify everything works

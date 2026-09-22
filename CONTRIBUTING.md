@@ -105,7 +105,7 @@ venv\Scripts\activate
 
 ```bash
 # Install development dependencies
-pip install -e ".[dev,test,metrics]"
+poetry install
 
 # This installs:
 # - moderato package in editable mode
@@ -190,10 +190,7 @@ moderato/
 │   ├── fastapi_advanced.py
 │   └── docker-compose.yml
 │
-├── docs/                      # Documentation
-│   ├── ALGORITHMS.md          # Algorithm deep dive
-│   ├── ARCHITECTURE.md        # Architecture details
-│   └── CONTRIBUTING.md        # This file
+├── CONTRIBUTING.md            # This file
 │
 ├── pyproject.toml             # Project metadata and dependencies
 ├── README.md                  # Project overview
@@ -519,9 +516,8 @@ except:  # Don't do this!
 1. **Code Comments**: Explain complex logic
 2. **Docstrings**: Document all public functions/classes
 3. **README**: Project overview and quick start
-4. **ALGORITHMS.md**: Algorithm deep dive
-5. **ARCHITECTURE.md**: System internals
-6. **Examples**: Working code samples
+4. **`moderato/scripts/` Lua scripts**: Atomic algorithm implementations
+5. **Examples**: Working code samples
 
 ### Writing Good Docstrings
 
@@ -586,9 +582,8 @@ When making changes:
 
 1. **Update docstrings** if function signature changes
 2. **Update README** if adding new features
-3. **Update ALGORITHMS.md** if modifying algorithm behavior
-4. **Update ARCHITECTURE.md** if changing system design
-5. **Add examples** for new features
+3. **Update the algorithm docstrings and Lua script comments** if modifying algorithm behavior
+4. **Add examples** for new features
 
 ---
 
@@ -837,7 +832,7 @@ async def profile_check():
 pip install -e .
 
 # Install with all extras
-pip install -e ".[dev,test,metrics]"
+poetry install
 
 # Run tests with coverage
 pytest --cov=moderato --cov-report=html
@@ -868,7 +863,7 @@ twine check dist/*
 
 ### Resources
 
-- **Documentation**: README.md, ALGORITHMS.md, ARCHITECTURE.md
+- **Documentation**: README.md and the inline docstrings in `moderato/`
 - **Examples**: `examples/` directory
 - **Tests**: `tests/` directory (great for learning usage)
 - **Issue Tracker**: Report bugs or request features

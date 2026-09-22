@@ -48,6 +48,11 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
     requests = int(match.group(1))
     period = match.group(2)
 
+    if requests < 1:
+        raise ValueError(
+            f"Invalid rate string: '{rate_string}'. " f"The request limit must be at least 1."
+        )
+
     # Normalize period to singular form
     period = period.rstrip("s")
 
@@ -65,7 +70,13 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
     return requests, period_seconds[period]
 
 
-def generate_key(prefix: str, identifier: str, tenant_type: str, time_window: str) -> str:
+def generate_key(
+    prefix: str,
+    identifier: str,
+    tenant_type: str,
+    policy: str,
+    time_window: str,
+) -> str:
     """
     Generate Redis key for rate limiting.
 
@@ -80,17 +91,21 @@ def generate_key(prefix: str, identifier: str, tenant_type: str, time_window: st
         prefix: Key prefix (e.g., "ratelimit")
         identifier: Unique identifier (e.g., IP address, user ID)
         tenant_type: Tenant type/tier (e.g., "free", "premium", "enterprise")
+        policy: Policy component identifying the limit itself
+            (e.g., "p100x60" for 100 requests per 60 seconds). Isolates
+            buckets for different policies so the same identity under
+            different rates never shares state.
         time_window: Time window identifier (e.g., "1700000100")
 
     Returns:
         Formatted Redis key
 
     Examples:
-        >>> generate_key("ratelimit", "192.168.1.1", "free", "1700000100")
-        'ratelimit:192.168.1.1:free:1700000100'
+        >>> generate_key("ratelimit", "192.168.1.1", "free", "p100x60", "1700000100")
+        'ratelimit:192.168.1.1:free:p100x60:1700000100'
 
-        >>> generate_key("ratelimit", "user:123", "premium", "1700000100")
-        'ratelimit:user%3A123:premium:1700000100'  # Colon encoded to prevent collision
+        >>> generate_key("ratelimit", "user:123", "premium", "p50x60", "1700000100")
+        'ratelimit:user%3A123:premium:p50x60:1700000100'  # Colon encoded to prevent collision
     """
     # Use URL-safe encoding for identifier and tenant_type
     # This prevents collisions: "a:b" != "a_b" after encoding
@@ -98,7 +113,7 @@ def generate_key(prefix: str, identifier: str, tenant_type: str, time_window: st
     safe_tenant = _url_encode_key_component(tenant_type)
 
     # Generate the key and apply hash optimization for long keys
-    full_key = f"{prefix}:{safe_id}:{safe_tenant}:{time_window}"
+    full_key = f"{prefix}:{safe_id}:{safe_tenant}:{policy}:{time_window}"
     return hash_key(full_key, max_length=200)
 
 

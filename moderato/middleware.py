@@ -1,8 +1,8 @@
 """
-Rate limit headers middleware for automatic header injection.
+Rate limit headers middleware for decorated responses.
 
-This middleware automatically adds standard rate limit headers to all HTTP responses,
-following industry best practices from GitHub, Twitter, and other major APIs.
+This module adds rate limit headers when a limiter decorator stores usage
+information on the request.
 """
 
 import logging
@@ -24,7 +24,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
     """
     Middleware to automatically add rate limit headers to responses.
 
-    This middleware adds the following headers to ALL responses:
+    This middleware adds the following headers when rate limit information is available:
     - X-RateLimit-Limit: Maximum requests allowed in the current window
     - X-RateLimit-Remaining: Requests remaining in the current window
     - X-RateLimit-Reset: Unix timestamp when the current window resets
@@ -56,21 +56,12 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         async def get_data(request: Request):
             return {"data": "..."}
 
-    The middleware will automatically add headers to all responses, even
-    successful ones, so clients always know their rate limit status.
+    Decorated endpoints receive headers on successful and rate-limited responses.
     """
 
-    def __init__(self, app: ASGIApp, always_add_headers: bool = True) -> None:
-        """
-        Initialize the middleware.
-
-        Args:
-            app: The ASGI application
-            always_add_headers: If True, add headers to all responses.
-                               If False, only add headers when rate limit info is available.
-        """
+    def __init__(self, app: ASGIApp) -> None:
+        """Initialize the middleware."""
         super().__init__(app)
-        self.always_add_headers = always_add_headers
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """

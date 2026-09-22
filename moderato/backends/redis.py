@@ -25,48 +25,6 @@ class RateLimitResult(NamedTuple):
     retry_after: int  # Milliseconds until rate limit resets
 
 
-# Inline fallback for the fixed window script, used only when
-# moderato/scripts/fixed_window.lua is unavailable (e.g. a broken install).
-# NOTE: This must stay in sync with scripts/fixed_window.lua, including the
-# negative-cost guard; tests/test_security.py executes both against Redis.
-FIXED_WINDOW_FALLBACK_SCRIPT = """
-local key = KEYS[1]
-local max_requests = tonumber(ARGV[1])
-local window_seconds = tonumber(ARGV[2])
-local window_end = tonumber(ARGV[3])
-local cost = tonumber(ARGV[4]) or 1000
-
--- Defense in depth: a negative cost would restore capacity
-if cost < 0 then
-    return redis.error_reply("cost must be non-negative")
-end
-
-local current = redis.call('INCRBY', key, cost)
-
-if current == cost then
-    redis.call('EXPIREAT', key, window_end)
-end
-
-local ttl = redis.call('TTL', key)
-if ttl < 0 then
-    ttl = window_seconds
-    redis.call('EXPIREAT', key, window_end)
-end
-
-local allowed = 0
-local remaining = 0
-
-if current <= max_requests then
-    allowed = 1
-    remaining = max_requests - current
-else
-    remaining = 0
-end
-
-return {allowed, remaining, ttl * 1000}
-"""
-
-
 class RedisBackend:
     """
     Redis backend with Lua script support for atomic rate limiting.
@@ -90,7 +48,7 @@ class RedisBackend:
         self._load_scripts()
 
     def _load_scripts(self) -> None:
-        """Load Lua scripts from files or use inline defaults."""
+        """Load bundled Lua scripts."""
         script_dir = Path(__file__).parent.parent / "scripts"
 
         # Load fixed window script
@@ -99,9 +57,7 @@ class RedisBackend:
             with open(fixed_window_path) as f:
                 self._scripts["fixed_window"] = f.read()
         else:
-            # Fallback inline script if file doesn't exist
-            # NOTE: This must stay in sync with scripts/fixed_window.lua
-            self._scripts["fixed_window"] = FIXED_WINDOW_FALLBACK_SCRIPT
+            logger.warning("fixed_window.lua not found, fixed window algorithm disabled")
 
         # Load token bucket script
         token_bucket_path = script_dir / "token_bucket.lua"
@@ -178,7 +134,7 @@ class RedisBackend:
     async def close(self) -> None:
         """Close Redis connection gracefully."""
         if self._redis and self._connected:
-            await self._redis.close()
+            await self._redis.aclose()  # type: ignore[attr-defined]
             self._connected = False
             logger.info("Closed Redis connection")
 

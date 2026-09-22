@@ -12,19 +12,10 @@ from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Callable, Optional
 
+from prometheus_client import Counter, Gauge, Histogram
+
 logger = logging.getLogger(__name__)
-
-# Check if prometheus_client is available
-try:
-    from prometheus_client import Counter, Gauge, Histogram
-
-    PROMETHEUS_AVAILABLE = True
-except ImportError:
-    PROMETHEUS_AVAILABLE = False
-    logger.warning(
-        "prometheus_client not installed. Metrics will be disabled. "
-        "Install with: pip install prometheus-client"
-    )
+PROMETHEUS_AVAILABLE = True
 
 
 class RateLimitMetrics:
@@ -74,13 +65,10 @@ class RateLimitMetrics:
             enabled: Whether metrics collection is enabled
         """
         self.namespace = namespace
-        self.enabled = enabled and PROMETHEUS_AVAILABLE
+        self.enabled = enabled
 
         if not self.enabled:
-            if not PROMETHEUS_AVAILABLE:
-                logger.info("Metrics disabled: prometheus_client not installed")
-            else:
-                logger.info("Metrics disabled by configuration")
+            logger.info("Metrics disabled by configuration")
             return
 
         # Initialize metrics
@@ -213,6 +201,17 @@ class RateLimitMetrics:
             duration = time.perf_counter() - start_time
             self.backend_operations_total.labels(operation=operation, status=status).inc()
             self.backend_operation_duration.labels(operation=operation).observe(duration)
+
+    def observe_check_duration(self, algorithm: str, duration: float) -> None:
+        if self.enabled:
+            self.checks_duration.labels(algorithm=algorithm).observe(duration)
+
+    def record_backend_operation(self, operation: str, success: bool, duration: float) -> None:
+        if not self.enabled:
+            return
+        status = "success" if success else "error"
+        self.backend_operations_total.labels(operation=operation, status=status).inc()
+        self.backend_operation_duration.labels(operation=operation).observe(duration)
 
     def record_check(self, algorithm: str, allowed: bool) -> None:
         """
@@ -397,5 +396,10 @@ def init_metrics(namespace: str = "moderato", enabled: bool = True) -> RateLimit
         Initialized metrics collector
     """
     global _global_metrics
-    _global_metrics = RateLimitMetrics(namespace=namespace, enabled=enabled)
+    if not enabled:
+        return RateLimitMetrics(namespace=namespace, enabled=False)
+    if _global_metrics is None:
+        _global_metrics = RateLimitMetrics(namespace=namespace, enabled=True)
+    elif _global_metrics.namespace != namespace:
+        raise ValueError("metrics are already initialized with a different namespace")
     return _global_metrics

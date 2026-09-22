@@ -6,11 +6,8 @@ import hashlib
 import re
 from typing import Optional
 
-# Keys longer than this are replaced by a truncated prefix plus a SHA-256
-# digest (see hash_key). The preserved prefix leaves room for the 64-char
-# hex digest and a 1-char separator.
-HASH_KEY_MAX_LENGTH = 200
-HASH_KEY_PRESERVED_LEN = HASH_KEY_MAX_LENGTH - 64 - 1
+# Components longer than this are replaced by a SHA-256 digest.
+KEY_COMPONENT_MAX_LENGTH = 100
 
 
 def parse_rate(rate_string: str) -> tuple[int, int]:
@@ -76,31 +73,13 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
     return requests, period_seconds[period]
 
 
-def scan_literal_may_miss_hashed_keys(scan_literal_len: int) -> bool:
-    """Whether a SCAN/MATCH pattern with this literal head can miss hashed keys.
-
-    ``hash_key`` replaces keys longer than ``HASH_KEY_MAX_LENGTH`` with their
-    first ``HASH_KEY_PRESERVED_LEN`` characters plus a SHA-256 digest. A
-    pattern only matches such a hashed key if the caller-controlled literal
-    part (everything before the wildcard) fits within the preserved prefix.
-
-    Args:
-        scan_literal_len: Length of the pattern's literal part, i.e. the
-            number of leading key characters that must survive hashing
-            (``prefix:identifier[:tenant]:`` including separators).
-
-    Returns:
-        True if keys hashed by ``hash_key`` may no longer match the pattern.
-    """
-    return scan_literal_len > HASH_KEY_PRESERVED_LEN
-
-
 def generate_key(
     prefix: str,
     identifier: str,
     tenant_type: str,
     policy: str,
     time_window: str,
+    scope: str = "global",
 ) -> str:
     """
     Generate Redis key for rate limiting.
@@ -121,25 +100,30 @@ def generate_key(
             buckets for different policies so the same identity under
             different rates never shares state.
         time_window: Time window identifier (e.g., "1700000100")
+        scope: Namespace for independently limited resources
 
     Returns:
         Formatted Redis key
 
     Examples:
         >>> generate_key("ratelimit", "192.168.1.1", "free", "p100x60", "1700000100")
-        'ratelimit:192.168.1.1:free:p100x60:1700000100'
+        'ratelimit:192.168.1.1:free:global:p100x60:1700000100'
 
         >>> generate_key("ratelimit", "user:123", "premium", "p50x60", "1700000100")
-        'ratelimit:user%3A123:premium:p50x60:1700000100'  # Colon encoded to prevent collision
+        'ratelimit:user%3A123:premium:global:p50x60:1700000100'
     """
-    # Use URL-safe encoding for identifier and tenant_type
-    # This prevents collisions: "a:b" != "a_b" after encoding
-    safe_id = _url_encode_key_component(identifier)
-    safe_tenant = _url_encode_key_component(tenant_type)
+    safe_id = normalize_key_component(identifier)
+    safe_tenant = normalize_key_component(tenant_type)
+    safe_scope = normalize_key_component(scope)
+    return f"{prefix}:{safe_id}:{safe_tenant}:{safe_scope}:{policy}:{time_window}"
 
-    # Generate the key and apply hash optimization for long keys
-    full_key = f"{prefix}:{safe_id}:{safe_tenant}:{policy}:{time_window}"
-    return hash_key(full_key, max_length=200)
+
+def normalize_key_component(value: str) -> str:
+    """Encode a Redis key component, hashing it when it is unusually long."""
+    encoded = _url_encode_key_component(value)
+    if len(encoded) <= KEY_COMPONENT_MAX_LENGTH:
+        return encoded
+    return f"sha256={hashlib.sha256(encoded.encode()).hexdigest()}"
 
 
 def _url_encode_key_component(value: str) -> str:
@@ -205,43 +189,6 @@ def get_time_window(window_seconds: int, timestamp: Optional[int] = None) -> str
     # Align to window boundary using epoch
     window_start = timestamp - (timestamp % window_seconds)
     return str(window_start)
-
-
-def hash_key(key: str, max_length: int = HASH_KEY_MAX_LENGTH) -> str:
-    """
-    Hash a key if it's too long for Redis.
-
-    Redis keys can be up to 512MB, but very long keys impact performance.
-    This function hashes keys that exceed a reasonable length.
-
-    Args:
-        key: The original key
-        max_length: Maximum allowed key length before hashing
-
-    Returns:
-        Original key or hashed version if too long
-
-    Examples:
-        >>> short_key = "ratelimit:user123:free:2024"
-        >>> hash_key(short_key) == short_key
-        True
-
-        >>> long_key = "ratelimit:" + "x" * 500
-        >>> len(hash_key(long_key)) < len(long_key)
-        True
-    """
-    if len(key) <= max_length:
-        return key
-
-    # Use SHA256 for consistent hashing
-    key_hash = hashlib.sha256(key.encode()).hexdigest()
-
-    # Preserve some prefix for debugging
-    prefix_len = max_length - len(key_hash) - 1
-    if prefix_len > 0:
-        return f"{key[:prefix_len]}_{key_hash}"
-
-    return key_hash
 
 
 def calculate_cost(requests: int, window_seconds: int) -> float:

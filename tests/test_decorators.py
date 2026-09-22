@@ -32,6 +32,52 @@ class TestDecorators:
             await my_endpoint(request)
 
     @pytest.mark.asyncio
+    async def test_method_and_route_define_default_scope(self, clean_limiter, mock_request):
+        class Route:
+            path = "/items/{item_id}"
+
+        class OtherRoute:
+            path = "/items/{other_id}"
+
+        get_request = mock_request()
+        get_request.method = "GET"
+        get_request.scope = {"method": "GET", "route": Route()}
+        post_request = mock_request()
+        post_request.method = "POST"
+        post_request.scope = {"method": "POST", "route": Route()}
+        other_route_request = mock_request()
+        other_route_request.method = "GET"
+        other_route_request.scope = {"method": "GET", "route": OtherRoute()}
+
+        @clean_limiter.limit("2/minute")
+        async def endpoint(request):
+            return request.method
+
+        assert await endpoint(get_request) == "GET"
+        assert await endpoint(get_request) == "GET"
+        with pytest.raises(RateLimitExceeded):
+            await endpoint(get_request)
+        assert await endpoint(post_request) == "POST"
+        assert await endpoint(other_route_request) == "GET"
+
+    @pytest.mark.asyncio
+    async def test_explicit_scope_shares_a_bucket(self, clean_limiter, mock_request):
+        request = mock_request()
+
+        @clean_limiter.limit("2/minute", scope="shared-api")
+        async def route_a(request):
+            return "a"
+
+        @clean_limiter.limit("2/minute", scope="shared-api")
+        async def route_b(request):
+            return "b"
+
+        assert await route_a(request) == "a"
+        assert await route_b(request) == "b"
+        with pytest.raises(RateLimitExceeded):
+            await route_a(request)
+
+    @pytest.mark.asyncio
     async def test_custom_key_function(self, clean_limiter, make_request):
         """Test decorator with custom key extraction."""
         limiter = clean_limiter

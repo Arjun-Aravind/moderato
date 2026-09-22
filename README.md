@@ -2,12 +2,12 @@
 
 *In musical notation, **moderato** means "at a moderate pace." Moderato enforces your API's tempo.*
 
-[![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org)
+[![Python Version](https://img.shields.io/badge/python-3.9--3.13-blue)](https://www.python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Redis](https://img.shields.io/badge/redis-7%2B-red)](https://redis.io)
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-A high-performance, Redis-backed rate limiting library for Python applications.
+A Redis-backed rate limiting library for async Python applications.
 
 [Features](#features) | [Quick Start](#quick-start) | [Algorithms](#algorithms) | [Documentation](#documentation) | [Examples](#examples)
 
@@ -15,14 +15,14 @@ A high-performance, Redis-backed rate limiting library for Python applications.
 
 ## What is Moderato?
 
-Moderato is a rate limiting library designed for modern Python applications. It provides multiple algorithms, automatic header injection, comprehensive metrics, and multi-tenant support out of the box.
+Moderato is a Redis-backed rate limiting library for async Python applications. It provides three algorithms, FastAPI integration, optional Prometheus metrics, cost-based limits, and tenant isolation.
 
 **Use cases:**
 - FastAPI applications requiring rate limiting
 - Multi-tenant SaaS platforms with tier-based limits
-- APIs needing production monitoring and observability
-- High-throughput services (10K+ req/s)
-- Applications requiring strict rate limit guarantees
+- APIs that need Redis-backed limits across multiple application instances
+- Services that need Prometheus counters and latency histograms
+- Applications requiring atomic rate limit decisions
 
 ---
 
@@ -31,13 +31,13 @@ Moderato is a rate limiting library designed for modern Python applications. It 
 ### Core Capabilities
 - **Three Algorithms** - Fixed Window, Token Bucket & Sliding Window
 - **Async-first design** - Built for FastAPI and modern async Python
-- **High performance** - <2ms p99 latency, 10K+ requests/second
-- **Zero race conditions** - Atomic operations via Redis Lua scripts
+- **Atomic decisions** - Redis Lua scripts keep checks and updates in one operation
+- **Redis server time** - Consistent windows across application instances
 - **Integer precision** - Uses integer math (x1000 multiplier) for accuracy
 
-### Production Features
-- **Automatic Headers** - Industry-standard rate limit headers on all responses
-- **Prometheus Metrics** - Comprehensive observability out of the box
+### Integrations and controls
+- **Rate limit headers** - Standard headers on decorated FastAPI responses
+- **Prometheus Metrics** - Optional counters and latency histograms
 - **Multi-tenant support** - Isolated limits for different users/tiers/organizations
 - **Decorator-based API** - Clean, declarative rate limiting
 - **Cost-based limiting** - Weight expensive operations appropriately
@@ -65,28 +65,31 @@ pip install 'moderato[all]'
 ### Basic Example
 
 ```python
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from moderato import RateLimiter, RateLimitHeadersMiddleware
 
-app = FastAPI()
 limiter = RateLimiter(redis_url="redis://localhost:6379")
 
-# Add automatic header injection (optional but recommended)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await limiter.connect()
+    yield
+    await limiter.close()
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(RateLimitHeadersMiddleware)
 
-@app.on_event("startup")
-async def startup():
-    await limiter.connect()
-
 @app.get("/api/users")
-@limiter.limit("100/minute")  # 100 requests per minute per IP
+@limiter.limit("100/minute")
 async def get_users(request: Request):
     return {"users": ["Alice", "Bob"]}
 ```
 
 This gives you:
 - Rate limiting (100 requests/minute per IP)
-- Automatic headers (X-RateLimit-Limit, X-RateLimit-Remaining, etc.)
+- Rate limit headers on this decorated endpoint
 - Proper 429 responses when exceeded
 - Redis-backed, distributed-ready
 
@@ -94,7 +97,7 @@ This gives you:
 
 ## Algorithms
 
-Moderato provides three production-tested algorithms. Choose based on your needs:
+Moderato provides three tested algorithms. Choose based on the traffic behavior you want:
 
 ### Fixed Window (Default)
 
@@ -116,7 +119,7 @@ async def endpoint(request: Request):
 
 ### Token Bucket
 
-**Best for:** Smooth rate limiting, bursty traffic, better user experience
+**Best for:** Smoothing bursts while allowing capacity to refill continuously
 
 ```python
 @limiter.limit("100/minute", algorithm="token_bucket")
@@ -129,12 +132,12 @@ async def endpoint(request: Request):
 - Tokens refill continuously (~1.67/second for 100/minute)
 - Each request consumes tokens
 
-**Pros:** Smooth traffic, no boundary bursts, better UX  
-**Cons:** Slightly more memory, more complex
+**Pros:** Continuous refill and configurable burst capacity
+**Cons:** State uses a Redis hash and allows bursts up to bucket capacity
 
 ### Sliding Window
 
-**Best for:** Maximum accuracy, strict SLA requirements, preventing all burst scenarios
+**Best for:** Approximating a rolling window without storing every request timestamp
 
 ```python
 @limiter.limit("100/minute", algorithm="sliding_window")
@@ -145,10 +148,10 @@ async def endpoint(request: Request):
 **How it works:**
 - Combines current window with weighted portion of previous window
 - Provides smooth transition between windows
-- Most accurate rate limiting
+- Approximates a rolling count with two fixed counters
 
-**Pros:** Most accurate, no gaming possible, fair distribution  
-**Cons:** Slightly higher memory and CPU usage
+**Pros:** Smooths fixed-window boundaries with constant Redis storage
+**Cons:** It is an approximation rather than an exact request log
 
 ### Algorithm Comparison
 
@@ -156,11 +159,11 @@ async def endpoint(request: Request):
 |---------|--------------|--------------|----------------|
 | Simplicity | High | Medium | Medium |
 | Boundary Bursts | Possible (2x) | None | None |
-| Memory Usage | Low (~100 bytes) | Medium (~150 bytes) | Medium (~200 bytes) |
-| Traffic Smoothness | Choppy | Smooth | Smooth |
-| Accuracy | Good | Good | Best |
+| Redis data | String counter | Hash with tokens and timestamp | Two string counters |
+| Traffic behavior | Resets at boundaries | Continuous refill | Weighted window transition |
+| Accuracy model | Exact fixed window | Exact token bucket state | Approximate rolling window |
 
-**Recommendation:** Start with Token Bucket for better UX, use Fixed Window for strict enforcement, use Sliding Window for maximum accuracy.
+**Recommendation:** Choose fixed window for simple quotas, token bucket for controlled bursts, and sliding window counter when fixed-window boundary bursts are undesirable.
 
 ---
 
@@ -227,9 +230,21 @@ async def smooth_endpoint(request: Request):
     return {"data": "..."}
 ```
 
+#### Share a limit across routes
+
+Decorated endpoints use separate method-and-route scopes by default. Set `scope` to share one bucket:
+
+```python
+@limiter.limit("100/minute", scope="search-api")
+async def search(request: Request):
+    ...
+```
+
+Manual `check()` calls use the `"global"` scope unless you pass one explicitly.
+
 ### Automatic Headers
 
-Add the middleware to automatically inject rate limit headers:
+For endpoints using `@limiter.limit(...)`, add the middleware to inject rate limit headers:
 
 ```python
 from moderato import RateLimitHeadersMiddleware
@@ -237,7 +252,7 @@ from moderato import RateLimitHeadersMiddleware
 app.add_middleware(RateLimitHeadersMiddleware)
 ```
 
-**Headers added to all responses:**
+**Headers added to decorated responses:**
 - `X-RateLimit-Limit`: Maximum requests allowed
 - `X-RateLimit-Remaining`: Requests remaining in current window
 - `X-RateLimit-Reset`: Unix timestamp when the limit resets
@@ -246,6 +261,8 @@ app.add_middleware(RateLimitHeadersMiddleware)
 - `Retry-After`: Seconds to wait before retrying
 
 ### Prometheus Metrics
+
+Install `moderato[metrics]`, then enable collection:
 
 ```python
 limiter = RateLimiter(
@@ -280,12 +297,15 @@ TIER_LIMITS = {
 }
 
 @app.get("/api/data")
-@limiter.limit(
-    rate="100/hour",  # Base rate (overridden by tenant_type logic)
-    key=lambda req: req.headers.get("X-API-Key"),
-    tenant_type=lambda req: get_user_tier(req.headers.get("X-API-Key"))
-)
 async def get_data(request: Request):
+    api_key = request.headers.get("X-API-Key", "anonymous")
+    tier = get_user_tier(api_key)
+    await limiter.check(
+        key=api_key,
+        rate=TIER_LIMITS[tier],
+        tenant_type=tier,
+        scope="GET:/api/data",
+    )
     return {"data": "..."}
 ```
 
@@ -342,19 +362,21 @@ await limiter.reset(key="user:123")
 
 ## Performance
 
-| Metric | Fixed Window | Token Bucket | Sliding Window |
-|--------|--------------|--------------|----------------|
-| Latency (p50) | 0.8ms | 1.0ms | 1.2ms |
-| Latency (p95) | 1.5ms | 1.8ms | 2.2ms |
-| Latency (p99) | 2.0ms | 2.2ms | 2.8ms |
-| Throughput | 15,000+ req/s | 12,000+ req/s | 10,000+ req/s |
-| Memory per key | ~100 bytes | ~150 bytes | ~200 bytes |
+Run the benchmark suite against a local Redis instance rather than relying on hardware-independent throughput claims:
 
-**Optimizations:**
-- Lua scripts cached (EVALSHA vs EVAL)
-- Connection pooling (max 50 connections)
-- Integer-only math (no float conversions)
-- Efficient key hashing for long keys
+```bash
+docker-compose -f docker-compose.dev.yml up -d
+poetry install --with benchmarks
+poetry run python benchmarks/performance.py --quick
+```
+
+The quick run reports throughput, latency percentiles, algorithm comparisons, and rate-limit accuracy. Run without `--quick` to include concurrent-client, Redis memory, and multi-tenant benchmarks. Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
+
+**Implemented optimizations:**
+- Cached Lua scripts with `EVALSHA` and `EVAL` fallback
+- Redis connection pooling
+- One atomic script call per rate limit decision
+- Bounded, component-level hashing for long identifiers and scopes
 
 ---
 
@@ -409,7 +431,7 @@ and the atomic Lua scripts in `moderato/scripts/` — both are heavily tested
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.9–3.13
 - Redis 7.0+
 - Poetry
 
@@ -438,7 +460,7 @@ make demo          # Run algorithm demo
 
 ## Testing
 
-Moderato has 60+ comprehensive tests covering:
+The test suite covers:
 
 - All three algorithms (Fixed Window, Token Bucket, Sliding Window)
 - Concurrent requests and race conditions

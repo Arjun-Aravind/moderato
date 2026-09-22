@@ -434,15 +434,12 @@ class TestHighLoadConcurrency:
         """Test sustained high load over multiple seconds."""
         limiter = clean_limiter
         key = f"sustained-{uuid4().hex}"
-        # Minute window: per-second windows let each 100-request round
-        # straddle a boundary and double-allow on slow CI runners, which
-        # makes wall-time-based assertions unsound.
         rate = "50/minute"
 
         total_allowed = 0
         total_denied = 0
 
-        for second in range(3):
+        for _ in range(3):
 
             async def make_request():
                 try:
@@ -458,12 +455,10 @@ class TestHighLoadConcurrency:
             total_allowed += allowed
             total_denied += denied
 
-            if second < 2:
-                await asyncio.sleep(1.0)
-
-        # The whole test finishes in a few seconds, well inside one minute
-        # window: the limit allows exactly 50, plus up to 50 more if the
-        # load crosses a single minute boundary.
+        # Three back-to-back rounds finish well within a single minute
+        # window on any runner, so the count is exactly 50; one boundary
+        # crossing is tolerated for slow runners, and two cannot occur
+        # because that would require the run to span more than 60s.
         assert (
             50 <= total_allowed <= 100
         ), f"Expected 50-100 allowed over sustained load, got {total_allowed}"

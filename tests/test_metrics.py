@@ -21,12 +21,14 @@ def _unregister(metrics):
 
 
 @pytest.fixture(autouse=True)
-def isolate_metrics(monkeypatch):
-    monkeypatch.setattr(metrics_module, "_global_metrics", None)
+def isolate_metrics():
+    original = metrics_module._global_metrics
+    metrics_module._global_metrics = None
     yield
     metrics = metrics_module.get_metrics()
     if metrics is not None:
         _unregister(metrics)
+    metrics_module._global_metrics = original
 
 
 def test_metrics_initialization_is_idempotent():

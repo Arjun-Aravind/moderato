@@ -22,7 +22,9 @@ class CheckResult:
         remaining: Requests remaining in the current window
         retry_after: Whole seconds to wait before retrying (0 if allowed)
         reset_at: Unix timestamp, from the Redis-backed decision, for the
-            next capacity reset
+            next capacity reset. For fixed and sliding window this is when
+            the current window ends; for token bucket it is when the bucket
+            is fully refilled
         window_seconds: Size of the rate limit window in seconds
 
     Example:

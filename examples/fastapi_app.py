@@ -72,7 +72,10 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 @app.exception_handler(RateLimitCallbackError)
 async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackError):
-    return JSONResponse(status_code=503, content={"error": "rate limit callback failed"})
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Rate limit callback failed", "callback": exc.callback},
+    )
 
 
 @app.get("/")

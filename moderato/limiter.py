@@ -417,6 +417,12 @@ class RateLimiter:
             max(1, (result.retry_after + 999) // 1000) if not result.allowed else 0
         )
 
+        reset_at = result.reset_at
+        if not result.allowed and reset_at is not None:
+            # A window boundary race can hand back a stale window end; the
+            # floor for a denial is now plus the enforced wait.
+            reset_at = max(reset_at, redis_time_seconds + retry_after_seconds)
+
         if self.metrics is not None:
             self.metrics.observe_check_duration(algorithm, time.perf_counter() - check_started)
             self.metrics.record_check(algorithm, result.allowed)
@@ -429,7 +435,7 @@ class RateLimiter:
             limit=requests,
             remaining=remaining_requests,
             retry_after=retry_after_seconds,
-            reset_at=result.reset_at,
+            reset_at=reset_at,
             window_seconds=window_seconds,
         )
 

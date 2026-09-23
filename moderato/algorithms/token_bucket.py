@@ -6,7 +6,6 @@ fixed window, with better handling of bursty traffic.
 """
 
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -85,8 +84,8 @@ class TokenBucket(RateLimitAlgorithm):
         # Preserve fractional refill rates so limits such as 1/hour can recover.
         refill_rate_per_second = max_requests / window_seconds
 
-        # Get current timestamp in milliseconds
-        current_time_ms = int(time.time() * 1000)
+        redis_time_seconds, redis_time_us = await self.backend.get_redis_time()
+        current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
 
         # Execute token bucket Lua script
         result = await self.backend.check_token_bucket(
@@ -98,12 +97,7 @@ class TokenBucket(RateLimitAlgorithm):
             cost=cost,
         )
 
-        # Calculate reset timestamp (when bucket would be full)
-        # If tokens remaining, no reset needed
-        # If denied, reset_at = current_time + retry_after
-        reset_at = None
-        if not result.allowed:
-            reset_at = (current_time_ms // 1000) + (result.retry_after // 1000)
+        reset_at = result.reset_at
 
         return RateLimitResult(
             allowed=result.allowed,

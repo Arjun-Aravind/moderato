@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from moderato import RateLimiter, RateLimitHeadersMiddleware
+from moderato.models import CheckResult
 
 
 @pytest.fixture
@@ -291,6 +292,24 @@ class TestMiddlewareIntegration:
             # Headers should be added
             assert "X-RateLimit-Limit" in response.headers
 
+    async def test_callback_failure_is_a_service_unavailable_response(self, clean_limiter):
+        import httpx
+
+        app = FastAPI()
+        app.add_middleware(RateLimitHeadersMiddleware)
+
+        @app.get("/data")
+        @clean_limiter.limit("10/minute", key=lambda request: (_ for _ in ()).throw(ValueError()))
+        async def data_endpoint(request: Request):
+            return {"data": "unreachable"}
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/data")
+
+        assert response.status_code == 503
+        assert response.json() == {"error": "Rate limit callback failed", "callback": "key"}
+
 
 class TestRateLimitMiddleware:
     """Tests for the lower-level ASGI RateLimitMiddleware."""
@@ -343,6 +362,35 @@ class TestRateLimitMiddleware:
         assert int(response.headers["Retry-After"]) > 0
         assert int(response.headers["X-RateLimit-Reset"]) > before
 
+    async def test_429_uses_reset_timestamp_from_decision(self):
+        import httpx
+
+        from moderato.decorators import RateLimitMiddleware
+
+        class DenyingLimiter:
+            async def check_with_info(self, **kwargs):
+                return CheckResult(
+                    allowed=False,
+                    limit=5,
+                    remaining=0,
+                    retry_after=2,
+                    reset_at=1_234_567_890,
+                    window_seconds=60,
+                )
+
+        async def app(scope, receive, send):
+            raise AssertionError("Denied request reached the application")
+
+        transport = httpx.ASGITransport(
+            app=RateLimitMiddleware(app, limiter=DenyingLimiter(), default_rate="5/minute")
+        )
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/")
+
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "2"
+        assert response.headers["X-RateLimit-Reset"] == "1234567890"
+
     async def test_429_survives_non_parseable_limit(self):
         """A manually raised RateLimitExceeded with a plain-number limit must still 429."""
 
@@ -363,4 +411,4 @@ class TestRateLimitMiddleware:
 
         assert response.status_code == 429
         assert response.headers["X-RateLimit-Limit"] == "5"
-        assert int(response.headers["X-RateLimit-Reset"]) > 1_000_000_000
+        assert "X-RateLimit-Reset" not in response.headers

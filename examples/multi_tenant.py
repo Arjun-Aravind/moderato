@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import RateLimitCallbackError, RateLimiter, RateLimitExceeded  # noqa: E402
 
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 limiter = RateLimiter(redis_url=redis_url)
@@ -84,6 +84,13 @@ def get_tenant_info(api_key: str) -> tuple:
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     """Handle rate limit exceeded with tenant context."""
+    headers = {
+        "X-RateLimit-Limit": exc.limit,
+        "X-RateLimit-Remaining": str(exc.remaining),
+        "Retry-After": str(exc.retry_after),
+    }
+    if exc.reset_at is not None:
+        headers["X-RateLimit-Reset"] = str(exc.reset_at)
     return JSONResponse(
         status_code=429,
         content={
@@ -92,12 +99,15 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
             "retry_after": exc.retry_after,
             "upgrade_url": "https://example.com/pricing",
         },
-        headers={
-            "X-RateLimit-Limit": exc.limit,
-            "X-RateLimit-Remaining": str(exc.remaining),
-            "X-RateLimit-Reset": str(exc.retry_after),
-            "Retry-After": str(exc.retry_after),
-        },
+        headers=headers,
+    )
+
+
+@app.exception_handler(RateLimitCallbackError)
+async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackError):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Rate limit callback failed", "callback": exc.callback},
     )
 
 

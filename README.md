@@ -257,10 +257,13 @@ app.add_middleware(RateLimitHeadersMiddleware)
 **Headers added to decorated responses:**
 - `X-RateLimit-Limit`: Maximum requests allowed
 - `X-RateLimit-Remaining`: Requests remaining in current window
-- `X-RateLimit-Reset`: Unix timestamp when the limit resets
+- `X-RateLimit-Reset`: Unix timestamp returned by the Redis-backed decision
 
 **Additional headers on 429 responses:**
 - `Retry-After`: Seconds to wait before retrying
+
+`Retry-After` is rounded up from the Lua decision's millisecond delay. Reset
+timestamps come from Redis-backed metadata rather than the application clock.
 
 ### Prometheus Metrics
 
@@ -326,7 +329,7 @@ async def ml_inference(request: Request):
 ### Error Handling
 
 ```python
-from moderato import RateLimitExceeded
+from moderato import RateLimitCallbackError, RateLimitExceeded
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
@@ -339,18 +342,34 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         },
         headers={"Retry-After": str(exc.retry_after)},
     )
+
+@app.exception_handler(RateLimitCallbackError)
+async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackError):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Rate limit callback failed", "callback": exc.callback},
+    )
 ```
+
+Key, tenant, and cost callbacks fail closed: their exception raises
+`RateLimitCallbackError` before the endpoint runs. With
+`RateLimitHeadersMiddleware`, this becomes the same 503 response automatically.
 
 ### Manual Checking
 
 ```python
-# Direct rate limit check
+# Enforcing check: raises RateLimitExceeded when denied.
 try:
     await limiter.check(key="user:123", rate="100/minute")
     # Request allowed
 except RateLimitExceeded as e:
     # Rate limited
     print(f"Retry after {e.retry_after} seconds")
+
+# Decision check: always returns CheckResult, including a denied decision.
+decision = await limiter.check_with_info(key="user:123", rate="100/minute")
+if not decision.allowed:
+    print(f"Retry after {decision.retry_after} seconds at {decision.reset_at}")
 
 # Get usage statistics
 usage = await limiter.get_usage(key="user:123", rate="100/minute")

@@ -1,11 +1,10 @@
-"""
-Tests for rate limiting decorators.
-"""
+"""Tests for rate limiting decorators."""
 
+import inspect
 
 import pytest
 
-from moderato import RateLimitExceeded
+from moderato import RateLimitCallbackError, RateLimitExceeded
 
 
 class TestDecorators:
@@ -249,23 +248,25 @@ class TestDecorators:
         assert int(headers["X-RateLimit-Reset"]) > 1_000_000_000
 
     @pytest.mark.asyncio
-    async def test_decorator_error_handling(self, clean_limiter):
-        """Test decorator handles errors in key/tenant functions gracefully."""
+    @pytest.mark.parametrize("callback", ["key", "tenant_type", "cost"])
+    async def test_callback_errors_fail_closed(self, clean_limiter, callback):
+        """Configured callbacks must not weaken identity or cost policies."""
         limiter = clean_limiter
 
-        # Key function that raises an error
-        @limiter.limit(
-            "5/minute", key=lambda req: req.nonexistent_attribute  # This will raise AttributeError
-        )
-        async def endpoint_with_error(request):
+        options = {
+            "key": {"key": lambda request: (_ for _ in ()).throw(ValueError())},
+            "tenant_type": {"tenant_type": lambda request: (_ for _ in ()).throw(ValueError())},
+            "cost": {"cost": lambda request: (_ for _ in ()).throw(ValueError())},
+        }[callback]
+
+        @limiter.limit("5/minute", **options)
+        async def endpoint(request):
             return {"status": "ok"}
 
-        # Should fall back to default key extraction (IP)
         request = type("Request", (), {"client": type("Client", (), {"host": "192.168.1.1"})()})()
-
-        # Should work despite error in key function
-        result = await endpoint_with_error(request)
-        assert result == {"status": "ok"}
+        with pytest.raises(RateLimitCallbackError) as exc_info:
+            await endpoint(request)
+        assert exc_info.value.callback == callback.replace("_type", "")
 
     @pytest.mark.asyncio
     async def test_ip_extraction_fallbacks(self, clean_limiter):
@@ -345,6 +346,24 @@ class TestDecorators:
         # Should work as async function
         result = await sync_endpoint(request)
         assert result == {"status": "ok", "type": "sync"}
+        assert list(inspect.signature(sync_endpoint).parameters) == ["request"]
+
+    @pytest.mark.asyncio
+    async def test_sync_function_wrapper_does_not_block_event_loop(
+        self, clean_limiter, mock_request
+    ):
+        import threading
+
+        loop_thread = threading.get_ident()
+        handler_thread = {}
+
+        @clean_limiter.limit("5/minute")
+        def sync_endpoint(request):
+            handler_thread["ident"] = threading.get_ident()
+            return "complete"
+
+        assert await sync_endpoint(mock_request()) == "complete"
+        assert handler_thread["ident"] != loop_thread
 
     @pytest.mark.asyncio
     async def test_algorithm_parameter(self, clean_limiter, mock_request):

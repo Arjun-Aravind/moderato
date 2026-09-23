@@ -10,6 +10,7 @@ These tests validate:
 """
 
 import asyncio
+import time
 from uuid import uuid4
 
 import pytest
@@ -264,14 +265,13 @@ class TestCheckWithInfo:
         for _ in range(5):
             await limiter.check_with_info(key=key, rate=rate)
 
-        # 6th request should raise RateLimitExceeded (for backward compat)
-        with pytest.raises(RateLimitExceeded) as exc_info:
-            await limiter.check_with_info(key=key, rate=rate)
-
-        # Exception should contain info
-        assert exc_info.value.remaining == 0
-        assert exc_info.value.retry_after > 0
-        assert exc_info.value.limit == rate
+        # Decision API always returns the denied result for callers that need
+        # response metadata without relying on exceptions.
+        result = await limiter.check_with_info(key=key, rate=rate)
+        assert result.allowed is False
+        assert result.remaining == 0
+        assert result.retry_after > 0
+        assert int(time.time()) - 60 < result.reset_at <= int(time.time()) + 60
 
     async def test_check_with_info_remaining_decrements(self, clean_limiter):
         """Test that remaining decrements with each request."""

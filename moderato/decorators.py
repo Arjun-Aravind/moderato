@@ -4,13 +4,13 @@ Decorator implementations for rate limiting.
 
 import functools
 import logging
-import time
 from inspect import iscoroutinefunction
 from typing import Any, Callable, Optional, TypeVar
 
+import anyio
 from typing_extensions import ParamSpec
 
-from .exceptions import RateLimitExceeded
+from .exceptions import RateLimitCallbackError, RateLimitExceeded
 from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
@@ -88,9 +88,7 @@ def create_limit_decorator(
                     trust_proxy_headers=trust_proxy_headers,
                 )
 
-                # Call the original function
-                # Note: This converts sync to async, which may not be ideal
-                return func(*args, **kwargs)
+                return await anyio.to_thread.run_sync(functools.partial(func, *args, **kwargs))
 
             return async_wrapper  # type: ignore[return-value]
         else:
@@ -181,6 +179,7 @@ async def _check_rate_limit(
         cost_func: Function to calculate cost
 
     Raises:
+        RateLimitCallbackError: If a configured callback fails
         RateLimitExceeded: If rate limit is exceeded
     """
     # Extract rate limit key
@@ -188,8 +187,8 @@ async def _check_rate_limit(
         try:
             key = key_func(request)
         except Exception as e:
-            logger.error(f"Error extracting key with key_func: {e}")
-            key = _get_default_key(request, trust_proxy_headers=trust_proxy_headers)
+            logger.exception("Rate limit key callback failed")
+            raise RateLimitCallbackError("key") from e
     else:
         key = _get_default_key(request, trust_proxy_headers=trust_proxy_headers)
 
@@ -199,7 +198,8 @@ async def _check_rate_limit(
         try:
             tenant_type = tenant_func(request)
         except Exception as e:
-            logger.error(f"Error extracting tenant type: {e}")
+            logger.exception("Rate limit tenant callback failed")
+            raise RateLimitCallbackError("tenant") from e
 
     # Calculate cost
     cost = 1
@@ -207,8 +207,8 @@ async def _check_rate_limit(
         try:
             cost = cost_func(request)
         except Exception as e:
-            logger.error(f"Error calculating cost: {e}")
-            cost = 1
+            logger.exception("Rate limit cost callback failed")
+            raise RateLimitCallbackError("cost") from e
 
     # Perform rate limit check using check_with_info to get usage in single call
     try:
@@ -227,8 +227,16 @@ async def _check_rate_limit(
                 "limit": result.limit,
                 "remaining": result.remaining,
                 "window_seconds": result.window_seconds,
-                "ttl": result.retry_after if result.retry_after > 0 else result.window_seconds,
+                "reset_at": result.reset_at,
             }
+
+        if not result.allowed:
+            raise RateLimitExceeded(
+                retry_after=result.retry_after,
+                limit=rate,
+                remaining=result.remaining,
+                reset_at=result.reset_at,
+            )
 
     except RateLimitExceeded as e:
         # Add rate limit headers to the request state
@@ -237,12 +245,10 @@ async def _check_rate_limit(
             request.state.rate_limit_headers = {
                 "X-RateLimit-Limit": str(parse_rate(rate)[0]),
                 "X-RateLimit-Remaining": str(e.remaining),
-                # reset_timestamp combines app time with retry_after derived
-                # from Redis server time; assume app and Redis clocks are
-                # aligned (single-host NTP is the normal deployment).
-                "X-RateLimit-Reset": str(int(time.time()) + e.retry_after),
                 "Retry-After": str(e.retry_after),
             }
+            if e.reset_at is not None:
+                request.state.rate_limit_headers["X-RateLimit-Reset"] = str(e.reset_at)
 
         # Re-raise the exception
         raise
@@ -390,33 +396,46 @@ class RateLimitMiddleware:
 
         # Check rate limit
         try:
-            await self.limiter.check(
+            result = await self.limiter.check_with_info(
                 key=_get_default_key(request, trust_proxy_headers=self.trust_proxy_headers),
                 rate=self.default_rate,
                 scope="middleware",
             )
         except RateLimitExceeded as e:
-            # Send 429 response
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 429,
-                    "headers": [
-                        (b"content-type", b"application/json"),
-                        (b"retry-after", str(e.retry_after).encode()),
-                        (b"x-ratelimit-limit", str(parse_rate(self.default_rate)[0]).encode()),
-                        (b"x-ratelimit-remaining", str(e.remaining).encode()),
-                        (b"x-ratelimit-reset", str(int(time.time()) + e.retry_after).encode()),
-                    ],
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": f'{{"error": "Rate limit exceeded", "retry_after": {e.retry_after}}}'.encode(),  # noqa: E501
-                }
-            )
+            result = None
+            denial: Optional[Any] = e
+        else:
+            denial = None if result.allowed else result
+
+        if denial is None:
+            await self.app(scope, receive, send)
             return
 
-        # Continue with the application
-        await self.app(scope, receive, send)
+        retry_after = denial.retry_after
+        remaining = denial.remaining
+        reset_at = denial.reset_at
+
+        # Send 429 response
+        headers = [
+            (b"content-type", b"application/json"),
+            (b"retry-after", str(retry_after).encode()),
+            (b"x-ratelimit-limit", str(parse_rate(self.default_rate)[0]).encode()),
+            (b"x-ratelimit-remaining", str(remaining).encode()),
+        ]
+        if reset_at is not None:
+            headers.append((b"x-ratelimit-reset", str(reset_at).encode()))
+
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 429,
+                "headers": headers,
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": f'{{"error": "Rate limit exceeded", "retry_after": {retry_after}}}'.encode(),  # noqa: E501
+            }
+        )
+        return

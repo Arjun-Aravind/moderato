@@ -6,7 +6,6 @@ by combining the current window with a weighted portion of the previous window.
 """
 
 import logging
-import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -101,8 +100,8 @@ class SlidingWindow(RateLimitAlgorithm):
               - Previous window: ratelimit:user:default:14:34
               - Weight: 0.5 (30 seconds into current window)
         """
-        # Get current timestamp
-        current_time = int(time.time())
+        current_time, redis_time_us = await self.backend.get_redis_time()
+        current_time_ms = current_time * 1000 + redis_time_us // 1000
 
         # Calculate current window start time
         window_start = current_time - (current_time % window_seconds)
@@ -121,18 +120,15 @@ class SlidingWindow(RateLimitAlgorithm):
             previous_key=previous_key,
             max_requests=max_requests,
             window_seconds=window_seconds,
-            current_time=current_time,
+            current_time_ms=current_time_ms,
             cost=cost,
         )
-
-        # Calculate reset timestamp (start of next window)
-        reset_at = window_start + window_seconds
 
         return RateLimitResult(
             allowed=result.allowed,
             remaining=result.remaining,
             retry_after=result.retry_after,
-            reset_at=reset_at,
+            reset_at=result.reset_at,
         )
 
     async def reset(self, key: str) -> bool:
@@ -149,7 +145,7 @@ class SlidingWindow(RateLimitAlgorithm):
         """
         # For sliding window, we need to reset multiple keys
         # We'll try to delete keys for recent windows
-        current_time = int(time.time())
+        current_time, _ = await self.backend.get_redis_time()
 
         # Try to delete current and recent windows
         success = False
@@ -187,7 +183,7 @@ class SlidingWindow(RateLimitAlgorithm):
         """
         max_requests: int = args[0] if len(args) > 0 else kwargs.get("max_requests", 0)
         window_seconds: int = args[1] if len(args) > 1 else kwargs.get("window_seconds", 60)
-        current_time = int(time.time())
+        current_time, _ = await self.backend.get_redis_time()
         window_start = current_time - (current_time % window_seconds)
         previous_window_start = window_start - window_seconds
 

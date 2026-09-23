@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **BREAKING:** `check_with_info()` now always returns a `CheckResult` (with `allowed=False` on denial) instead of raising `RateLimitExceeded`. Use `check()` when you want the exception; both share a single Redis decision.
+- **BREAKING:** Key, tenant, and cost callback exceptions no longer fall back silently to IP/default-tenant/cost=1. They now raise `RateLimitCallbackError` (HTTP 503) before the endpoint runs. `RateLimitHeadersMiddleware` maps it to a 503 JSON response.
+- Decorated synchronous endpoints now run in a worker thread via `anyio.to_thread.run_sync` instead of blocking the event loop; `anyio` is a new main dependency.
+- `X-RateLimit-Reset` is now derived from Redis/Lua (`reset_at`) instead of the application clock, and is omitted when unknown. `RateLimitExceeded` and `CheckResult` gained `reset_at`. For token bucket, `reset_at` is the time the bucket is fully refilled.
+- Removed the unused `inject_rate_limit_headers` helper.
+
+### Fixed
+
+- `trust_proxy_headers=True` now takes precedence over the direct client address, which is the proxy itself behind a reverse proxy; previously all clients shared the proxy's bucket.
+- Flaky `test_sustained_high_load` now uses an hour window so the allowed total is deterministic on any runner.
+
 ## v0.3.0 (2026-09-18)
 
 ### Changed

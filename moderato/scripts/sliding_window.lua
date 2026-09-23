@@ -6,10 +6,10 @@
 -- KEYS[2] = previous window key (e.g., "ratelimit:user123:default:sliding:1700000040")
 -- ARGV[1] = max_requests (e.g., 100000 for 100 requests with 1000x multiplier)
 -- ARGV[2] = window_seconds (e.g., 60 for 1 minute window)
--- ARGV[3] = current_timestamp (seconds since epoch)
+-- ARGV[3] = current_timestamp_ms (milliseconds since epoch, from Redis TIME)
 -- ARGV[4] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
 --
--- Returns: {allowed (1 or 0), remaining, retry_after_ms}
+-- Returns: {allowed (1 or 0), remaining, retry_after_ms, reset_at}
 --
 -- Sliding Window Algorithm:
 -- - Combines current window with weighted portion of previous window
@@ -26,7 +26,8 @@ local current_key = KEYS[1]
 local previous_key = KEYS[2]
 local max_requests = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
-local current_timestamp = tonumber(ARGV[3])
+local current_timestamp_ms = tonumber(ARGV[3])
+local current_timestamp = math.floor(current_timestamp_ms / 1000)
 local cost_arg = ARGV[4]
 local cost = 1000
 if cost_arg then
@@ -153,5 +154,12 @@ end
 -- Return results
 -- allowed: 1 if request should proceed, 0 if rate limited
 -- remaining: estimated tokens remaining (with multiplier)
+local reset_at
+if allowed == 1 then
+    reset_at = window_start + window_seconds
+else
+    reset_at = math.ceil((current_timestamp_ms + retry_after_ms) / 1000)
+end
+
 -- retry_after_ms: milliseconds until rate limit might allow request
-return {allowed, remaining, retry_after_ms}
+return {allowed, remaining, retry_after_ms, reset_at}

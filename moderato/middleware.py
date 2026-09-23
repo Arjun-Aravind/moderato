@@ -6,15 +6,14 @@ information on the request.
 """
 
 import logging
-import time
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from .exceptions import RateLimitExceeded
+from .exceptions import RateLimitCallbackError, RateLimitExceeded
 from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
@@ -87,6 +86,13 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
 
             return response
 
+        except RateLimitCallbackError as exc:
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": "Rate limit callback failed", "callback": exc.callback},
+            )
         except RateLimitExceeded as exc:
             # Rate limit was exceeded - add headers with retry info.
             # exc.limit may be a rate string ("100/minute") or a plain number
@@ -99,10 +105,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
             headers = self._create_rate_limit_headers(
                 limit=limit_display,
                 remaining=0,
-                # reset_timestamp combines app time with retry_after derived
-                # from Redis server time; assume app and Redis clocks are
-                # aligned (single-host NTP is the normal deployment).
-                reset_timestamp=int(time.time()) + exc.retry_after,
+                reset_at=exc.reset_at,
                 retry_after=exc.retry_after,
             )
 
@@ -130,27 +133,23 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         """
         limit = rate_limit_info.get("limit")
         remaining = rate_limit_info.get("remaining", 0)
-        window_seconds = rate_limit_info.get("window_seconds", 60)
-
-        # Calculate reset timestamp (current time + TTL or window)
-        ttl = rate_limit_info.get("ttl", window_seconds)
-        reset_timestamp = int(time.time()) + ttl
+        reset_at = rate_limit_info.get("reset_at")
 
         # Add standard headers
         response.headers["X-RateLimit-Limit"] = str(limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
-        response.headers["X-RateLimit-Reset"] = str(reset_timestamp)
+        if reset_at is not None:
+            response.headers["X-RateLimit-Reset"] = str(reset_at)
 
         logger.debug(
-            f"Added rate limit headers: limit={limit}, remaining={remaining}, "
-            f"reset={reset_timestamp}"
+            f"Added rate limit headers: limit={limit}, remaining={remaining}, " f"reset={reset_at}"
         )
 
     def _create_rate_limit_headers(
         self,
         limit: str,
         remaining: int,
-        reset_timestamp: int,
+        reset_at: Optional[int],
         retry_after: Optional[int] = None,
     ) -> dict[str, str]:
         """
@@ -159,7 +158,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         Args:
             limit: Rate limit string (e.g., "100/minute")
             remaining: Requests remaining
-            reset_timestamp: Unix timestamp when limit resets
+            reset_at: Unix timestamp when limit resets, if known
             retry_after: Seconds to wait before retrying (optional)
 
         Returns:
@@ -168,68 +167,12 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         headers = {
             "X-RateLimit-Limit": limit,
             "X-RateLimit-Remaining": str(remaining),
-            "X-RateLimit-Reset": str(reset_timestamp),
         }
+
+        if reset_at is not None:
+            headers["X-RateLimit-Reset"] = str(reset_at)
 
         if retry_after is not None:
             headers["Retry-After"] = str(retry_after)
 
         return headers
-
-
-def inject_rate_limit_headers(
-    limit: int,
-    remaining: int,
-    window_seconds: int,
-    ttl: Optional[int] = None,
-) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """
-    Decorator to inject rate limit information into request state.
-
-    This function is meant to be used internally by the limiter decorator
-    to pass rate limit information to the middleware.
-
-    Args:
-        limit: Maximum requests allowed
-        remaining: Requests remaining
-        window_seconds: Size of the time window
-        ttl: Time to live for the current window
-
-    Returns:
-        Decorator function
-
-    Example:
-        @inject_rate_limit_headers(limit=100, remaining=75, window_seconds=60)
-        async def my_endpoint():
-            return {"data": "..."}
-    """
-
-    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        async def wrapper(*args: Any, **kwargs: Any) -> Any:
-            # Execute the original function
-            result = await func(*args, **kwargs)
-
-            # Try to inject rate limit info into request state
-            # This requires the Request object to be in args or kwargs
-            request = None
-            for arg in args:
-                if isinstance(arg, Request):
-                    request = arg
-                    break
-
-            if request is None:
-                request = kwargs.get("request")
-
-            if request and hasattr(request, "state"):
-                request.state.rate_limit_info = {
-                    "limit": limit,
-                    "remaining": remaining,
-                    "window_seconds": window_seconds,
-                    "ttl": ttl or window_seconds,
-                }
-
-            return result
-
-        return wrapper
-
-    return decorator

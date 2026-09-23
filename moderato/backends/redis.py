@@ -23,6 +23,7 @@ class RateLimitResult(NamedTuple):
     allowed: bool  # Whether the request is allowed
     remaining: int  # Number of requests remaining (with multiplier)
     retry_after: int  # Milliseconds until rate limit resets
+    reset_at: int  # Unix timestamp in seconds, calculated by Redis/Lua
 
 
 class RedisBackend:
@@ -189,17 +190,19 @@ class RedisBackend:
                 )
 
             # Parse result
-            if not isinstance(result, list) or len(result) != 3:
+            if not isinstance(result, list) or len(result) != 4:
                 raise BackendError(f"Invalid script result: {result}")
 
             allowed = bool(int(result[0]))
             remaining = int(result[1])
             retry_after_ms = int(result[2])
+            reset_at = int(result[3])
 
             return RateLimitResult(
                 allowed=allowed,
                 remaining=remaining,
                 retry_after=retry_after_ms,
+                reset_at=reset_at,
             )
 
         except RedisError as e:
@@ -302,17 +305,19 @@ class RedisBackend:
                 )
 
             # Parse result
-            if not isinstance(result, list) or len(result) != 3:
+            if not isinstance(result, list) or len(result) != 4:
                 raise BackendError(f"Invalid script result: {result}")
 
             allowed = bool(int(result[0]))
             remaining = int(result[1])
             retry_after_ms = int(result[2])
+            reset_at = int(result[3])
 
             return RateLimitResult(
                 allowed=allowed,
                 remaining=remaining,
                 retry_after=retry_after_ms,
+                reset_at=reset_at,
             )
 
         except RedisError as e:
@@ -387,7 +392,7 @@ class RedisBackend:
         previous_key: str,
         max_requests: int,
         window_seconds: int,
-        current_time: int,
+        current_time_ms: int,
         cost: int = 1000,
     ) -> RateLimitResult:
         """
@@ -401,7 +406,7 @@ class RedisBackend:
             previous_key: Redis key for previous window
             max_requests: Maximum requests allowed (with 1000x multiplier)
             window_seconds: Size of the time window in seconds
-            current_time: Current Unix timestamp in seconds
+            current_time_ms: Current Redis Unix timestamp in milliseconds
             cost: Tokens to consume (with 1000x multiplier, default 1000)
 
         Returns:
@@ -424,33 +429,40 @@ class RedisBackend:
                         previous_key.encode(),  # KEYS[2]
                         str(int(max_requests)).encode(),  # ARGV[1]
                         str(window_seconds).encode(),  # ARGV[2]
-                        str(current_time).encode(),  # ARGV[3]
+                        str(current_time_ms).encode(),  # ARGV[3]
                         str(cost).encode(),  # ARGV[4]
                     )
                 except NoScriptError:
                     # Script not in cache, fall back to EVAL
                     logger.debug("Script not in cache, using EVAL")
                     result = await self._execute_sliding_window_script(
-                        current_key, previous_key, max_requests, window_seconds, current_time, cost
+                        current_key,
+                        previous_key,
+                        max_requests,
+                        window_seconds,
+                        current_time_ms,
+                        cost,
                     )
             else:
                 # No SHA available, use EVAL
                 result = await self._execute_sliding_window_script(
-                    current_key, previous_key, max_requests, window_seconds, current_time, cost
+                    current_key, previous_key, max_requests, window_seconds, current_time_ms, cost
                 )
 
             # Parse result
-            if not isinstance(result, list) or len(result) != 3:
+            if not isinstance(result, list) or len(result) != 4:
                 raise BackendError(f"Invalid script result: {result}")
 
             allowed = bool(int(result[0]))
             remaining = int(result[1])
             retry_after_ms = int(result[2])
+            reset_at = int(result[3])
 
             return RateLimitResult(
                 allowed=allowed,
                 remaining=remaining,
                 retry_after=retry_after_ms,
+                reset_at=reset_at,
             )
 
         except RedisError as e:
@@ -466,7 +478,7 @@ class RedisBackend:
         previous_key: str,
         max_requests: int,
         window_seconds: int,
-        current_time: int,
+        current_time_ms: int,
         cost: int = 1000,
     ) -> Any:
         """Execute sliding window Lua script with EVAL."""
@@ -484,7 +496,7 @@ class RedisBackend:
             previous_key.encode(),  # KEYS[2]
             str(int(max_requests)).encode(),  # ARGV[1]
             str(window_seconds).encode(),  # ARGV[2]
-            str(current_time).encode(),  # ARGV[3]
+            str(current_time_ms).encode(),  # ARGV[3]
             str(cost).encode(),  # ARGV[4]
         )
 

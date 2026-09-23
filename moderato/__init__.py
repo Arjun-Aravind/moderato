@@ -23,7 +23,12 @@ FastAPI integration:
     >>>     return {"data": "..."}
 """
 
-from .exceptions import BackendError, RateLimitConfigError, RateLimitExceeded
+from .exceptions import (
+    BackendError,
+    RateLimitCallbackError,
+    RateLimitConfigError,
+    RateLimitExceeded,
+)
 from .limiter import RateLimiter
 from .models import CheckResult, RateLimitConfig
 
@@ -61,6 +66,7 @@ __email__ = "arjunaravind748@gmail.com"
 __all__ = [
     "RateLimiter",
     "RateLimitExceeded",
+    "RateLimitCallbackError",
     "RateLimitConfigError",
     "BackendError",
     "RateLimitConfig",

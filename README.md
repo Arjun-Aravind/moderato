@@ -383,7 +383,9 @@ await limiter.reset(key="user:123")
 
 ## Performance
 
-Run the benchmark suite against a local Redis instance rather than relying on hardware-independent throughput claims:
+Numbers on this page's benchmarks are measured, not claimed: the harness commits its raw results, reports variance across repeated trials, and documents the exact environment. See [BENCHMARKS.md](BENCHMARKS.md) for methodology, per-run data, and a head-to-head comparison against slowapi and fastapi-limiter.
+
+Run the benchmark suite against a local Redis instance yourself:
 
 ```bash
 docker-compose -f docker-compose.dev.yml up -d
@@ -391,7 +393,9 @@ poetry install --with benchmarks
 poetry run python benchmarks/performance.py --quick
 ```
 
-The quick run reports throughput, latency percentiles, algorithm comparisons, and rate-limit accuracy. Run without `--quick` to include concurrent-client, Redis memory, and multi-tenant benchmarks. Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
+The quick run exercises the same sections with reduced sizes; drop `--quick` for the full-size suite (roughly twice the runtime). Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
+
+**Measured on a 2-vCPU sandbox with Redis 7 on localhost (CPython 3.12):** ~3.5k sequential and ~4.3k concurrent checks/s for the limiter alone (p99 < 0.5 ms), ~1.1–1.5k req/s end-to-end behind a FastAPI app — the same band as slowapi and fastapi-limiter under an identical ASGI workload. The same app without a limiter does ~3.2–3.9k req/s, so per-request limiter work (including the Redis round trips) accounts for the drop; raw Redis itself sustains ~9.6–13.6k simple ops/s on this box and is not the bottleneck. Environment-specific; see [BENCHMARKS.md](BENCHMARKS.md) for the full data and caveats.
 
 **Implemented optimizations:**
 - Cached Lua scripts with `EVALSHA` and `EVAL` fallback

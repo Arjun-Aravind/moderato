@@ -54,9 +54,9 @@ runs.
   limit against a fresh key must land inside the analytically expected
   band (see [Accuracy under load](#accuracy-under-load)).
 - **Connection pool disclosure.** The shipped default pool
-  (`RateLimitConfig.max_connections = 50`) can reject in-flight checks
-  under deep bursts (see [Default pool capacity](#default-pool-capacity)).
-  The concurrency sections therefore run with the pool raised to 200 via
+  (`RateLimitConfig.max_connections = 50`) can reject borrows when every
+  pooled connection is in use (see [Default pool capacity](#default-pool-capacity)).
+  The concurrency sections therefore run with the pool raised to 250 via
   the same public config field, so those tables measure the limiter rather
   than the pool; the default-pool behavior is measured separately and not
   hidden.
@@ -66,8 +66,8 @@ runs.
 
 ## Results — moderato alone
 
-Raw data: `benchmarks/results/full-20260928T164500Z-full1.json` (run 1) and
-`benchmarks/results/full-20260928T165500Z-full2.json` (run 2). Each run is
+Raw data: `benchmarks/results/full-20260928T-full1.json` (run 1) and
+`benchmarks/results/full-20260928T-full2.json` (run 2). Each run is
 a complete, independent execution of the whole suite.
 
 ### Throughput (limiter only, no HTTP)
@@ -76,11 +76,12 @@ a complete, independent execution of the whole suite.
 
 | Run | Sequential (req/s) | Concurrent (req/s) | Speedup |
 | --- | --- | --- | --- |
-| 1 | 3,477 ± 138 (CV 4.0%) | 4,295 ± 184 (CV 4.3%) | 1.24× |
-| 2 | 3,581 ± 134 (CV 3.7%) | 4,307 ± 142 (CV 3.3%) | 1.20× |
+| 1 | 3,507 ± 231 (CV 6.6%) | 4,239 ± 254 (CV 6.0%) | 1.21× |
+| 2 | 3,681 ± 94 (CV 2.6%) | 4,360 ± 161 (CV 3.7%) | 1.18× |
 
-Per-trial values are in the JSON. Sequential and concurrent throughput are
-stable across the two runs to within ~3% and ~0.3% respectively.
+Per-trial values are in the JSON. Sequential and concurrent throughput
+agree across the two runs to within ~5% and ~3% respectively; single-trial
+CVs run 2.6–6.6%.
 
 ### Latency
 
@@ -89,8 +90,8 @@ trials:
 
 | Run | p50 | p90 | p95 | p99 | p99.9 | max |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 0.266 ms | 0.333 ms | 0.358 ms | 0.427 ms | 0.591 ms | 1.175 ms |
-| 2 | 0.294 ms | 0.344 ms | 0.364 ms | 0.411 ms | 0.543 ms | 1.321 ms |
+| 1 | 0.284 ms | 0.344 ms | 0.369 ms | 0.442 ms | 0.626 ms | 1.319 ms |
+| 2 | 0.262 ms | 0.321 ms | 0.340 ms | 0.398 ms | 0.566 ms | 1.520 ms |
 
 ### Concurrency sweep
 
@@ -102,14 +103,14 @@ higher).
 
 | Clients | Run 1 req/s | Run 1 p50/p99 | Run 2 req/s | Run 2 p50/p99 |
 | --- | --- | --- | --- | --- |
-| 1 | 3,903 ± 4.7% | 0.25 / 0.38 ms | 3,240 ± 9.8% | 0.31 / 0.42 ms |
-| 2 | 4,718 ± 3.6% | 0.41 / 0.65 ms | 4,655 ± 1.1% | 0.42 / 0.60 ms |
-| 5 | 4,940 ± 1.2% | 0.99 / 1.38 ms | 4,963 ± 1.8% | 0.99 / 1.24 ms |
-| 10 | 5,007 ± 1.2% | 1.95 / 2.75 ms | 4,983 ± 1.4% | 1.97 / 2.57 ms |
-| 25 | 4,727 ± 5.6% | 4.91 / 9.25 ms | 4,932 ± 1.0% | 4.97 / 6.67 ms |
-| 50 | 4,592 ± 1.2% | 10.7 / 13.4 ms | 4,745 ± 11.1% | 9.90 / 22.9 ms |
-| 100 | 4,438 ± 3.6% | 22.0 / 28.3 ms | 4,197 ± 4.8% | 22.6 / 42.7 ms |
-| 200 | 4,451 ± 1.2% | 44.5 / 51.3 ms | 4,428 ± 0.8% | 44.5 / 60.8 ms |
+| 1 | 3,778 ± 9.6% | 0.25 / 0.36 ms | 3,791 ± 9.7% | 0.25 / 0.36 ms |
+| 2 | 4,836 ± 1.0% | 0.40 / 0.55 ms | 4,783 ± 3.0% | 0.40 / 0.61 ms |
+| 5 | 5,055 ± 1.2% | 0.97 / 1.31 ms | 5,064 ± 1.3% | 0.96 / 1.43 ms |
+| 10 | 5,095 ± 1.8% | 1.91 / 2.69 ms | 5,184 ± 1.4% | 1.91 / 2.43 ms |
+| 25 | 4,754 ± 7.1% | 5.22 / 7.39 ms | 5,221 ± 0.7% | 4.75 / 6.12 ms |
+| 50 | 4,558 ± 0.2% | 10.8 / 13.2 ms | 4,500 ± 3.1% | 10.8 / 15.9 ms |
+| 100 | 4,283 ± 2.1% | 22.8 / 34.9 ms | 4,433 ± 2.0% | 22.1 / 33.2 ms |
+| 200 | 4,332 ± 3.9% | 44.8 / 66.8 ms | 4,386 ± 1.3% | 45.2 / 55.9 ms |
 
 ### Algorithm comparison
 
@@ -119,9 +120,9 @@ decision.
 
 | Algorithm | Run 1 throughput | Run 1 p50/p99 | Run 2 throughput | Run 2 p50/p99 |
 | --- | --- | --- | --- | --- |
-| fixed_window | 3,407 ± 328 req/s | 0.29 / 0.58 ms | 3,252 ± 209 req/s | 0.30 / 0.57 ms |
-| token_bucket | 3,453 ± 33 req/s | 0.28 / 0.41 ms | 3,205 ± 89 req/s | 0.32 / 0.45 ms |
-| sliding_window | 3,458 ± 140 req/s | 0.28 / 0.41 ms | 3,215 ± 70 req/s | 0.31 / 0.45 ms |
+| fixed_window | 3,322 ± 279 req/s | 0.30 / 0.45 ms | 3,847 ± 45 req/s | 0.25 / 0.36 ms |
+| token_bucket | 3,434 ± 36 req/s | 0.28 / 0.40 ms | 3,587 ± 20 req/s | 0.27 / 0.37 ms |
+| sliding_window | 3,457 ± 33 req/s | 0.28 / 0.42 ms | 3,603 ± 86 req/s | 0.27 / 0.37 ms |
 
 ### Memory per key
 
@@ -132,11 +133,12 @@ name, value encoding, and Redis' per-entry bookkeeping.
 | Algorithm | Keys per identity | Bytes per key |
 | --- | --- | --- |
 | fixed_window | 1.0 | 152.0 ± 0.0 |
-| token_bucket | 1.0 | 200.0 ± 0.0 |
-| sliding_window | 1.0 | 168.0 ± 0.0 |
+| token_bucket | 1.0 | 199.6 ± 2.5 |
+| sliding_window | 1.0 | 152.0 ± 0.0 |
 
-Identical across both runs. Token bucket stores the most state per key
-(tokens and last-refill timestamp in a small hash).
+Identical across both runs (the token bucket's ± 2.5 bytes is Redis
+allocator rounding on the small hash it stores). Token bucket stores the
+most state per key (tokens and last-refill timestamp in a small hash).
 
 ### Accuracy under load
 
@@ -159,31 +161,47 @@ Fixed and sliding windows refill nothing mid-window and are held to exactly
 ### Multi-tenant
 
 100 tenants × 100 requests × 3 trials, tier mix 70/25/5
-(free/premium/enterprise): 4,486 ± 92 req/s (run 1), 4,364 ± 46 req/s
+(free/premium/enterprise): 4,514 ± 19 req/s (run 1), 4,111 ± 197 req/s
 (run 2) — consistent with the plain concurrency sweep.
 
 ### Default pool capacity
 
-The shipped default pool rejects a Redis borrow once 50 connections are in
-use (redis-py's non-blocking asyncio pool raises `Too many connections`).
-A dedicated probe (1,000 concurrent checks per level, default pool) did
-**not** trip this boundary at 25–200 concurrent in either published run —
-but in an earlier development run, the 100-client sweep level did abort
-with exactly that error. The boundary is timing-dependent: bursts that
-sustain more than ~50 truly in-flight checks can raise
-`moderato.exceptions.BackendError` as shipped. Applications expecting deep
-concurrency should raise `RateLimitConfig.max_connections`.
+The shipped default pool rejects a Redis borrow once no connection is idle
+and all 50 are checked out (redis-py's non-blocking asyncio pool raises
+`Too many connections`). A dedicated probe splits 1,000 checks across
+N workers per level (so exactly N checks are in flight, 25–200) on the
+default pool and records both rejections and the observed peak pool usage:
+
+| Concurrent | Run 1 outcomes | Run 1 peak in use | Run 2 outcomes | Run 2 peak in use |
+| --- | --- | --- | --- | --- |
+| 25 | 1,000 ok | 7 / 50 | 1,000 ok | 4 / 50 |
+| 50 | 1,000 ok | 9 / 50 | 1,000 ok | 7 / 50 |
+| 75 | 1,000 ok | 10 / 50 | 1,000 ok | 8 / 50 |
+| 100 | 1,000 ok | 11 / 50 | 1,000 ok | 11 / 50 |
+| 200 | 1,000 ok | 14 / 50 | 1,000 ok | 12 / 50 |
+
+The boundary was not tripped in either published run, and the observed
+peak stays at 14 of 50 connections even at 200 concurrent: each localhost
+check completes in well under a millisecond, so far fewer than 50 checks
+are ever mid-round-trip at once. The rejection path is real
+(redis-py raises once every pooled connection is checked out) but how
+close a deployment gets to it depends on the Redis round-trip time, not
+on the client count — a remote Redis with multi-millisecond RTTs would
+sustain far deeper overlap. Applications with high true concurrency and a
+slow Redis should raise `RateLimitConfig.max_connections`.
 
 ## Head-to-head vs slowapi and fastapi-limiter
 
-Raw data: `benchmarks/results/compare-20260928T164500Z.json` (run 1) and
-`benchmarks/results/compare-20260928T164701Z.json` (run 2).
+Raw data: `benchmarks/results/compare-20260928T-c1.json` (run 1) and
+`benchmarks/results/compare-20260928T-c2.json` (run 2).
 
 **What is identical for everyone:** the same minimal FastAPI app shape
 (one `GET /` returning a small JSON body, per-IP keying, client
 `127.0.0.1`), the same in-process httpx client (`ASGITransport`, no
-network), the same Redis instance, `FLUSHDB` before each (library,
-scenario) so every scenario starts empty, 1,000 requests per trial × 3
+network), the same Redis instance, keys namespaced under a run-specific
+prefix with only those keys deleted between levels and between (library,
+scenario) pairs — the database is never flushed, and every limited-scenario
+level starts from an empty quota — plus 1,000 requests per trial × 3
 trials per concurrency level.
 
 **What is per-library (as-shipped, documented usage):**
@@ -218,38 +236,38 @@ as-shipped facts worth knowing:
 | Clients | plain FastAPI | moderato | slowapi | fastapi-limiter |
 | --- | --- | --- | --- | --- |
 | **Run 1** | | | | |
-| 1 | 3,560 | 1,310 | 1,590 | 1,500 |
-| 10 | 3,680 | 1,480 | 1,660 | 1,290 |
-| 50 | 3,700 | 1,420 | 1,410 | 1,360 |
-| 100 | 3,650 | 1,310 | 1,360 | 1,370 |
+| 1 | 3,652 | 1,284 | 1,587 | 1,566 |
+| 10 | 3,884 | 1,462 | 1,675 | 1,465 |
+| 50 | 3,783 | 1,421 | 1,716 | 1,338 |
+| 100 | 3,726 | 1,396 | 1,668 | 1,222 |
 | **Run 2** | | | | |
-| 1 | 3,770 | 1,080 | 1,350 | 1,220 |
-| 10 | 3,160 | 1,450 | 1,560 | 1,210 |
-| 50 | 2,970 | 1,220 | 1,640 | 1,260 |
-| 100 | 3,380 | 1,290 | 1,720 | 1,340 |
+| 1 | 3,773 | 1,239 | 1,718 | 1,667 |
+| 10 | 3,856 | 1,522 | 1,767 | 1,506 |
+| 50 | 3,832 | 1,414 | 1,827 | 1,428 |
+| 100 | 3,175 | 1,377 | 1,824 | 1,364 |
 
-(req/s, mean of 3 trials; CVs and per-trial values are in the JSON. slowapi
-shows the highest single-trial noise — CVs up to 17%.)
+(req/s, mean of 3 trials; CVs and per-trial values are in the JSON. All
+four apps show occasional 10–20% single-trial dips on this shared sandbox.)
 
 ### Limited path (limit 100/minute, rejections expected)
 
-Same shape; every library correctly allowed exactly 100 requests per
-window (80 timed + 20 warm-up) at 1 client, then 429s — with occasional
-window-boundary crossings granting an extra 100 (fixed-window behavior,
-visible in the `status_counts` of the raw JSON).
+Same shape; every library allowed exactly 100 requests per window (80
+timed + 20 warm-up) and returned 2,900 × 429 at every concurrency level in
+both runs — the per-level quota reset makes these counts fully
+deterministic (visible in the `status_counts` of the raw JSON).
 
 | Clients | plain FastAPI | moderato | slowapi | fastapi-limiter |
 | --- | --- | --- | --- | --- |
 | **Run 1** | | | | |
-| 1 | 3,420 | 1,140 | 1,140 | 1,530 |
-| 10 | 3,510 | 1,410 | 1,240 | 1,470 |
-| 50 | 3,630 | 1,250 | 1,190 | 1,370 |
-| 100 | 3,750 | 1,280 | 1,030 | 1,230 |
+| 1 | 3,179 | 1,255 | 1,229 | 1,515 |
+| 10 | 3,583 | 1,415 | 1,252 | 1,469 |
+| 50 | 3,596 | 1,277 | 1,162 | 1,487 |
+| 100 | 3,679 | 1,317 | 1,155 | 1,383 |
 | **Run 2** | | | | |
-| 1 | 3,090 | 1,200 | 980 | 1,530 |
-| 10 | 3,400 | 1,190 | 1,020 | 1,510 |
-| 50 | 3,650 | 1,210 | 830 | 1,370 |
-| 100 | 3,040 | 1,240 | 1,090 | 1,360 |
+| 1 | 3,349 | 1,139 | 1,211 | 1,543 |
+| 10 | 3,562 | 1,414 | 1,372 | 1,422 |
+| 50 | 3,546 | 1,416 | 1,309 | 1,426 |
+| 100 | 3,524 | 1,354 | 1,255 | 1,353 |
 
 ### Redis floor
 
@@ -257,30 +275,34 @@ Raw Redis operations per request, no HTTP stack, same client machine:
 
 | Pattern | 1 client | 10 clients | 50 clients | 100 clients |
 | --- | --- | --- | --- | --- |
-| 1× EVALSHA | 9,227 /s | 13,328 /s | 13,430 /s | 13,154 /s |
-| 2× EVALSHA (TIME + script) | 4,346 /s | 7,621 /s | 6,429 /s | 6,259 /s |
+| 1× EVALSHA | 9,665 /s | 13,143 /s | 13,151 /s | 13,031 /s |
+| 2× EVALSHA (TIME + script) | 4,488 /s | 7,548 /s | 4,854 /s | 5,811 /s |
+
+(Run 2 agrees to within ~5% on the 1× row and ~10% on the noisier 2× row.)
 
 ### Interpretation
 
 - **The HTTP stack dominates every library.** The plain app tops out at
-  ~3.0–3.8k req/s in-process on this box; all three limiter libraries land
-  in the same 1.0–1.7k band, adding roughly 0.3–0.6 ms per request. None
+  ~3.2–3.9k req/s in-process on this box; all three limiter libraries land
+  in the same 1.1–1.8k band, adding roughly 0.3–0.6 ms per request. None
   of them is the bottleneck a deployment would feel first.
-- **Not Redis-bound.** Raw Redis sustains 9–13k single-command ops/s
+- **Not Redis-bound.** Raw Redis sustains 9.6–13.6k single-command ops/s
   here, several times any library's end-to-end number: under HTTP the
   workload is client-bound (event loop + ASGI), and even the limiter-only
-  throughput of moderato (3.5–4.5k/s) sits near the 2-round-trip Redis
+  throughput of moderato (3.5–4.4k/s) sits near the 2-round-trip Redis
   floor rather than at a library-imposed ceiling.
 - **moderato trails slightly, by design.** Each moderato decision makes
   two sequential Redis round trips (`TIME` for server-authoritative time,
   then the Lua script); slowapi and fastapi-limiter make one. That buys
   windows that stay consistent across application instances without
-  trusting client clocks, at a visible ~10–30% throughput cost at low
-  concurrency in this comparison. Whether that tradeoff is right depends
-  on whether you need distributed time consistency.
+  trusting client clocks, at a visible ~10–25% throughput cost at low
+  concurrency in this comparison (moderato p50 0.78 ms vs slowapi
+  0.53–0.58 ms — the extra ~0.2 ms is one localhost round trip). Whether
+  that tradeoff is right depends on whether you need distributed time
+  consistency.
 - **All three enforce their configured limits.** In the limited scenario
-  each library allowed exactly the configured 100 per minute (modulo
-  documented fixed-window boundary effects).
+  each library allowed exactly the configured 100 per minute and 429'd
+  the other 2,900 requests at every level in both runs.
 
 ### Caveats
 

@@ -1,533 +1,756 @@
 """
-Performance benchmarks for Moderato rate limiter.
+Reproducible performance benchmarks for the Moderato rate limiter.
 
-Tests throughput, latency, and scalability under various conditions.
+Methodology:
+- Every scenario runs multiple trials; each published number carries the
+  trial mean, sample standard deviation, and min/median/max spread.
+- Redis keys are derived from a deterministic run id (--run-id) and swept
+  before and after the run, so re-running with the same id replays the
+  same key layout from an empty state.
+- Results are written as machine-readable JSON alongside the human summary.
+  The JSON files committed under benchmarks/results/ back the numbers in
+  BENCHMARKS.md.
+- Memory is read from Redis itself (MEMORY USAGE), never estimated.
+- Latency is measured per request around the await; concurrent scenarios
+  therefore report per-request latency including client-side queueing.
 
-Performance Targets:
-- p50 latency: < 2ms
-- p99 latency: < 10ms
-- Throughput (sequential): > 3,000 req/s
-- Throughput (concurrent): > 10,000 req/s
-- Memory per key: < 200 bytes
-- Accuracy at limit: 100%
+Usage:
+    python benchmarks/performance.py --quick
+    python benchmarks/performance.py --trials 5 --run-id 20260928T120000Z
 """
 
 import argparse
 import asyncio
+import json
+import math
 import os
+import platform
 import statistics
-
-# Add parent directory to path
 import sys
 import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
+from urllib.parse import urlparse
+
+import redis.asyncio as redis
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato.utils import normalize_key_component  # noqa: E402
+
+REDIS_URL_DEFAULT = "redis://localhost:6379"
+
+# Request counts and trial counts per profile. "quick" exists for local
+# smoke runs (e.g. `make benchmark-quick`); published numbers use "full".
+FULL_PROFILE: dict[str, Any] = {
+    "throughput_trials": 5,
+    "throughput_requests": 3000,
+    "latency_trials": 3,
+    "latency_samples": 2000,
+    "sweep_trials": 3,
+    "sweep_client_counts": [1, 2, 5, 10, 25, 50, 100, 200],
+    "sweep_requests_per_client": 100,
+    "algorithm_trials": 3,
+    "algorithm_samples": 1000,
+    "accuracy_limit": 50,
+    "accuracy_multiplier": 4,
+    "memory_identities": 4000,
+    "tenant_trials": 3,
+    "tenant_count": 100,
+    "tenant_requests_per_tenant": 100,
+}
+
+QUICK_PROFILE: dict[str, Any] = {
+    "throughput_trials": 2,
+    "throughput_requests": 1000,
+    "latency_trials": 1,
+    "latency_samples": 500,
+    "sweep_trials": 1,
+    "sweep_client_counts": [1, 10, 50, 100],
+    "sweep_requests_per_client": 50,
+    "algorithm_trials": 1,
+    "algorithm_samples": 300,
+    "accuracy_limit": 50,
+    "accuracy_multiplier": 4,
+    "memory_identities": 1000,
+    "tenant_trials": 1,
+    "tenant_count": 20,
+    "tenant_requests_per_tenant": 20,
+}
+
+HIGH_RATE = "100000/minute"  # High enough that no benchmark request is denied
+
+
+def _read_cpu_model() -> str:
+    """CPU model string from /proc/cpuinfo, or a best-effort fallback."""
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.lower().replace(" ", "").startswith("modelname"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or "unknown"
+
+
+def _read_total_ram_mib() -> Optional[int]:
+    """Total system RAM in MiB from /proc/meminfo, when available."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
+def _logical_cpu_count() -> int:
+    """CPUs usable by this process (respects cgroup/affinity limits)."""
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 0
+
+
+def _redis_placement(url: str) -> str:
+    """Describe where Redis lives relative to this process."""
+    host = urlparse(url).hostname or "unknown"
+    if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        return "localhost (same machine)"
+    return host
+
+
+def percentile(sorted_values: Sequence[float], pct: float) -> float:
+    """Nearest-rank percentile of an ascending-sorted sequence."""
+    if not sorted_values:
+        return 0.0
+    rank = math.ceil((pct / 100.0) * len(sorted_values))
+    idx = max(0, min(len(sorted_values) - 1, rank - 1))
+    return sorted_values[idx]
+
+
+def summarize(values: Sequence[float]) -> dict[str, Any]:
+    """Trial statistics: mean, sample stdev, CV, and the min/median/max spread."""
+    vals = [float(v) for v in values]
+    mean = statistics.mean(vals)
+    stdev = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    return {
+        "trials": len(vals),
+        "values": [round(v, 4) for v in vals],
+        "mean": round(mean, 4),
+        "stdev": round(stdev, 4),
+        "cv_pct": round((stdev / mean) * 100, 2) if mean else 0.0,
+        "min": round(min(vals), 4),
+        "median": round(statistics.median(vals), 4),
+        "max": round(max(vals), 4),
+    }
+
+
+def latency_summary(trials_latencies: Sequence[Sequence[float]]) -> dict[str, Any]:
+    """Percentiles pooled across trials, plus per-trial spread of p50/p99."""
+    pooled: list[float] = []
+    per_trial_p50: list[float] = []
+    per_trial_p99: list[float] = []
+    for trial in trials_latencies:
+        ordered = sorted(trial)
+        per_trial_p50.append(percentile(ordered, 50))
+        per_trial_p99.append(percentile(ordered, 99))
+        pooled.extend(trial)
+    ordered = sorted(pooled)
+    return {
+        "samples": len(pooled),
+        "pooled_ms": {
+            "min": round(ordered[0], 4),
+            "p50": round(percentile(ordered, 50), 4),
+            "p90": round(percentile(ordered, 90), 4),
+            "p95": round(percentile(ordered, 95), 4),
+            "p99": round(percentile(ordered, 99), 4),
+            "p99.9": round(percentile(ordered, 99.9), 4),
+            "max": round(ordered[-1], 4),
+            "mean": round(statistics.mean(pooled), 4),
+        },
+        "p50_ms": summarize(per_trial_p50),
+        "p99_ms": summarize(per_trial_p99),
+    }
 
 
 class PerformanceBenchmark:
-    """Performance testing for rate limiter."""
+    """Run the moderato benchmark scenarios and record results with variance."""
 
-    # Performance targets
-    TARGETS = {
-        "p50_latency_ms": 2.0,
-        "p99_latency_ms": 10.0,
-        "throughput_sequential": 3000,
-        "throughput_concurrent": 10000,
-        "accuracy_percent": 100.0,
-    }
-
-    def __init__(self, redis_url: str = "redis://localhost:6379", quick: bool = False):
+    def __init__(
+        self,
+        redis_url: str,
+        profile: str,
+        config: dict[str, Any],
+        run_id: str,
+    ):
         self.redis_url = redis_url
+        self.profile = profile
+        self.config = config
+        self.run_id = run_id
         self.results: dict[str, Any] = {}
-        self.quick = quick  # Run faster with fewer iterations
-        self.passed_targets = []
-        self.failed_targets = []
+        self.limiter: Optional[RateLimiter] = None
+        self.probe: Optional[redis.Redis] = None
+        self.redis_info: dict[str, Any] = {}
+        sweep_max = max(config["sweep_client_counts"])
+        self.pool_size = sweep_max + 50
 
-    async def setup(self):
-        """Setup benchmark environment."""
+    # -- infrastructure -----------------------------------------------------
+
+    def bench_key(self, *parts: Any) -> str:
+        """Deterministic limiter key for this run (prefixed by the limiter)."""
+        return ":".join(["bench", self.run_id, *[str(p) for p in parts]])
+
+    def redis_key_pattern(self, *parts: Any) -> str:
+        """SCAN pattern for this run's keys.
+
+        moderato URL-encodes key components (colons become %3A), so the
+        pattern must be built through the library's own encoder, including
+        the trailing separator.
+        """
+        prefix = self.limiter.config.key_prefix if self.limiter else "ratelimit"
+        component = ":".join(["bench", self.run_id, *[str(p) for p in parts]]) + ":"
+        return f"{prefix}:{normalize_key_component(component)}*"
+
+    async def _delete_bench_keys(self) -> int:
+        assert self.probe is not None
+        deleted = 0
+        batch: list[str] = []
+        async for key in self.probe.scan_iter(match=self.redis_key_pattern(), count=500):
+            batch.append(key)
+            if len(batch) >= 500:
+                deleted += await self.probe.delete(*batch)
+                batch = []
+        if batch:
+            deleted += await self.probe.delete(*batch)
+        return deleted
+
+    async def setup(self) -> None:
+        # The default pool (max_connections=50) rejects in-flight checks past
+        # ~50 true concurrency with redis-py's non-blocking pool, which would
+        # clip the high-concurrency levels. Raise it through the public
+        # RateLimitConfig field so scaling sections measure the limiter, and
+        # measure the default-pool boundary separately (pool_capacity probe).
         self.limiter = RateLimiter(redis_url=self.redis_url)
+        self.limiter.config.max_connections = self.pool_size
         await self.limiter.connect()
-        print("Connected to Redis")
-        print("Starting performance benchmarks...\n")
+        self.probe = redis.from_url(self.redis_url, decode_responses=True)
+        await self.probe.ping()
+        swept = await self._delete_bench_keys()
+        print(f"Connected to Redis at {self.redis_url} (run id: {self.run_id})")
+        print(
+            f"Limiter connection pool raised to {self.pool_size} "
+            f"(default 50) for the concurrency sections"
+        )
+        if swept:
+            print(f"Swept {swept} leftover keys from a previous run with this id")
 
-    async def teardown(self):
-        """Cleanup after benchmarks."""
-        await self.limiter.close()
-        print("\nBenchmarks completed")
+    async def teardown(self) -> None:
+        if self.probe is not None:
+            swept = await self._delete_bench_keys()
+            await self.probe.aclose()
+            print(f"\nCleaned up {swept} benchmark keys")
+        if self.limiter is not None:
+            await self.limiter.close()
+        print("Benchmarks completed")
 
-    def _check_target(self, name: str, value: float, target: float, higher_is_better: bool = True):
-        """Check if a metric meets its target."""
-        if higher_is_better:
-            passed = value >= target
-        else:
-            passed = value <= target
+    # -- scenarios ------------------------------------------------------------
 
-        if passed:
-            self.passed_targets.append(name)
-        else:
-            self.failed_targets.append(name)
+    async def benchmark_throughput(self) -> None:
+        """Max throughput, sequential vs concurrently issued requests."""
+        requests = self.config["throughput_requests"]
+        trials = self.config["throughput_trials"]
+        print(f"Throughput ({requests} requests x {trials} trials)")
+        print("-" * 60)
 
-        return passed
+        seq_rates: list[float] = []
+        con_rates: list[float] = []
+        assert self.limiter is not None
 
-    async def benchmark_throughput(self, requests: int = None):
-        """Test maximum throughput."""
-        if requests is None:
-            requests = 1000 if self.quick else 5000
+        for trial in range(trials):
+            start = time.perf_counter()
+            for i in range(requests):
+                await self.limiter.check(key=self.bench_key("throughput", "seq", i), rate=HIGH_RATE)
+            seq_time = time.perf_counter() - start
+            seq_rates.append(requests / seq_time)
 
-        print(f"Throughput Test ({requests} requests)")
-        print("-" * 50)
+            start = time.perf_counter()
+            tasks = [
+                self.limiter.check(key=self.bench_key("throughput", "con", i), rate=HIGH_RATE)
+                for i in range(requests)
+            ]
+            await asyncio.gather(*tasks)
+            con_time = time.perf_counter() - start
+            con_rates.append(requests / con_time)
 
-        rate = "100000/minute"  # Very high limit to avoid rate limiting
-
-        # Warm up
-        await self.limiter.check(key="warmup", rate=rate)
-
-        # Sequential throughput
-        start = time.perf_counter()
-        for i in range(requests):
-            key = f"throughput:seq:{i}"
-            await self.limiter.check(key=key, rate=rate)
-        seq_time = time.perf_counter() - start
-        seq_throughput = requests / seq_time
-
-        print(f"Sequential: {seq_throughput:.1f} req/s ({seq_time:.2f}s total)")
-
-        # Concurrent throughput
-        start = time.perf_counter()
-        tasks = []
-        for i in range(requests):
-            key = f"throughput:con:{i}"
-            tasks.append(self.limiter.check(key=key, rate=rate))
-        await asyncio.gather(*tasks)
-        con_time = time.perf_counter() - start
-        con_throughput = requests / con_time
-
-        print(f"Concurrent: {con_throughput:.1f} req/s ({con_time:.2f}s total)")
-        print(f"Speedup: {con_throughput/seq_throughput:.2f}x\n")
+            print(
+                f"  trial {trial + 1}/{trials}: sequential {seq_rates[-1]:8.1f} req/s | "
+                f"concurrent {con_rates[-1]:8.1f} req/s"
+            )
 
         self.results["throughput"] = {
-            "sequential": seq_throughput,
-            "concurrent": con_throughput,
-            "speedup": con_throughput / seq_throughput,
+            "requests_per_trial": requests,
+            "sequential_req_s": summarize(seq_rates),
+            "concurrent_req_s": summarize(con_rates),
+            "speedup": summarize([c / s for c, s in zip(con_rates, seq_rates)]),
         }
+        t = self.results["throughput"]
+        print(
+            f"  sequential: {t['sequential_req_s']['mean']:,.0f} "
+            f"± {t['sequential_req_s']['stdev']:,.0f} req/s (CV "
+            f"{t['sequential_req_s']['cv_pct']}%)\n"
+            f"  concurrent: {t['concurrent_req_s']['mean']:,.0f} "
+            f"± {t['concurrent_req_s']['stdev']:,.0f} req/s (CV "
+            f"{t['concurrent_req_s']['cv_pct']}%)\n"
+        )
 
-    async def benchmark_latency(self, samples: int = None):
-        """Test latency distribution."""
-        if samples is None:
-            samples = 200 if self.quick else 1000
+    async def benchmark_latency(self) -> None:
+        """Latency distribution of sequential single checks."""
+        samples = self.config["latency_samples"]
+        trials = self.config["latency_trials"]
+        print(f"Latency distribution ({samples} samples x {trials} trials)")
+        print("-" * 60)
+        assert self.limiter is not None
 
-        print(f"Latency Test ({samples} samples)")
-        print("-" * 50)
+        trials_latencies: list[list[float]] = []
+        for _ in range(trials):
+            latencies: list[float] = []
+            for i in range(samples):
+                start = time.perf_counter()
+                await self.limiter.check(key=self.bench_key("latency", i), rate=HIGH_RATE)
+                latencies.append((time.perf_counter() - start) * 1000.0)
+            trials_latencies.append(latencies)
 
-        rate = "100000/minute"
-        latencies = []
-
-        for i in range(samples):
-            key = f"latency:{i}"
-            start = time.perf_counter()
-            await self.limiter.check(key=key, rate=rate)
-            latency = (time.perf_counter() - start) * 1000  # Convert to ms
-            latencies.append(latency)
-
-        latencies.sort()
-
-        stats = {
-            "min": min(latencies),
-            "max": max(latencies),
-            "mean": statistics.mean(latencies),
-            "median": statistics.median(latencies),
-            "p95": latencies[int(len(latencies) * 0.95)],
-            "p99": latencies[int(len(latencies) * 0.99)],
-            "stdev": statistics.stdev(latencies) if len(latencies) > 1 else 0,
-        }
-
-        print(f"Min: {stats['min']:.2f}ms")
-        print(f"Median: {stats['median']:.2f}ms")
-        print(f"Mean: {stats['mean']:.2f}ms")
-        print(f"P95: {stats['p95']:.2f}ms")
-        print(f"P99: {stats['p99']:.2f}ms")
-        print(f"Max: {stats['max']:.2f}ms")
-        print(f"StdDev: {stats['stdev']:.2f}ms\n")
-
+        stats = latency_summary(trials_latencies)
+        pooled = stats["pooled_ms"]
         self.results["latency"] = stats
+        print(
+            f"  p50 {pooled['p50']:.3f}ms | p90 {pooled['p90']:.3f}ms | p95 {pooled['p95']:.3f}ms"
+            f" | p99 {pooled['p99']:.3f}ms | p99.9 {pooled['p99.9']:.3f}ms |"
+            f" max {pooled['max']:.3f}ms"
+        )
+        print(
+            f"  per-trial spread: p50 {stats['p50_ms']['mean']:.3f}"
+            f"±{stats['p50_ms']['stdev']:.3f}ms, "
+            f"p99 {stats['p99_ms']['mean']:.3f}±{stats['p99_ms']['stdev']:.3f}ms\n"
+        )
 
-    async def benchmark_concurrent_clients(self):
-        """Test with varying number of concurrent clients."""
-        print("Concurrent Clients Test")
-        print("-" * 50)
+    async def benchmark_concurrency_sweep(self) -> None:
+        """Throughput and latency as client concurrency grows."""
+        client_counts = self.config["sweep_client_counts"]
+        per_client = self.config["sweep_requests_per_client"]
+        trials = self.config["sweep_trials"]
+        print(
+            f"Concurrency sweep ({client_counts} clients, {per_client} req/client, "
+            f"{trials} trials)"
+        )
+        print("-" * 60)
+        assert self.limiter is not None
 
-        client_counts = [1, 10, 50, 100, 500, 1000]
-        requests_per_client = 100
-        rate = "100000/minute"
-
-        results = []
-
+        rows = []
         for num_clients in client_counts:
+            rates: list[float] = []
+            trials_latencies: list[list[float]] = []
 
-            async def client_work(client_id: int):
-                """Simulate client making requests."""
-                for i in range(requests_per_client):
-                    key = f"client:{client_id}:req:{i}"
-                    await self.limiter.check(key=key, rate=rate)
+            async def client_work(client_id: int, trial: int) -> list[float]:
+                latencies = []
+                for i in range(per_client):
+                    start = time.perf_counter()
+                    await self.limiter.check(
+                        key=self.bench_key("sweep", trial, client_id, i), rate=HIGH_RATE
+                    )
+                    latencies.append((time.perf_counter() - start) * 1000.0)
+                return latencies
 
-            start = time.perf_counter()
-            tasks = [client_work(i) for i in range(num_clients)]
-            await asyncio.gather(*tasks)
-            elapsed = time.perf_counter() - start
+            for trial in range(trials):
+                start = time.perf_counter()
+                latencies = await asyncio.gather(
+                    *[client_work(c, trial) for c in range(num_clients)]
+                )
+                elapsed = time.perf_counter() - start
+                rates.append((num_clients * per_client) / elapsed)
+                trials_latencies.extend(latencies)
 
-            total_requests = num_clients * requests_per_client
-            throughput = total_requests / elapsed
-
-            print(f"{num_clients:4} clients: {throughput:8.1f} req/s ({elapsed:.2f}s)")
-
-            results.append({"clients": num_clients, "throughput": throughput, "time": elapsed})
-
-        self.results["concurrent_clients"] = results
-        print()
-
-    async def benchmark_rate_limiting_accuracy(self):
-        """Test rate limiting accuracy."""
-        print("Rate Limiting Accuracy Test")
-        print("-" * 50)
-
-        test_cases = [
-            ("10/second", 10, 1.0),
-            ("100/minute", 100, 60.0),
-            ("50/second", 50, 1.0),
-        ]
-
-        for rate_str, expected_allowed, _window_seconds in test_cases:
-            key = f"accuracy:{rate_str}:{datetime.now(timezone.utc).isoformat()}"
-
-            # Send requests rapidly
-            allowed = 0
-            denied = 0
-
-            for _ in range(expected_allowed * 2):  # Try double the limit
-                try:
-                    await self.limiter.check(key=key, rate=rate_str)
-                    allowed += 1
-                except RateLimitExceeded:
-                    denied += 1
-
-            accuracy = (allowed / expected_allowed) * 100
+            summary = latency_summary(trials_latencies)
+            row = {
+                "clients": num_clients,
+                "requests_per_trial": num_clients * per_client,
+                "throughput_req_s": summarize(rates),
+                "latency": summary,
+            }
+            rows.append(row)
+            th = row["throughput_req_s"]
             print(
-                f"{rate_str:12} - Allowed: {allowed}/{expected_allowed} "
-                f"({accuracy:.1f}% accurate)"
+                f"  {num_clients:4} clients: {th['mean']:9,.1f} ± {th['stdev']:9,.1f} req/s | "
+                f"p50 {summary['pooled_ms']['p50']:6.3f}ms | "
+                f"p99 {summary['pooled_ms']['p99']:6.3f}ms"
             )
 
+        self.results["concurrency_sweep"] = rows
         print()
 
-    async def benchmark_memory_usage(self):
-        """Estimate memory usage per key."""
-        print("Memory Usage Test")
-        print("-" * 50)
-
-        # Create many keys
-        num_keys = 10000
-        rate = "100/minute"
-
-        print(f"Creating {num_keys} rate limit keys...")
-
-        for i in range(num_keys):
-            key = f"memory:test:{i}"
-            await self.limiter.check(key=key, rate=rate)
-
-        # Estimate memory per key (approximate)
-        # Each key stores: counter (8 bytes) + TTL + key name
-        estimated_per_key = 100  # bytes (conservative estimate)
-        total_memory = num_keys * estimated_per_key
-
-        print(f"Keys created: {num_keys}")
-        print(f"Estimated memory per key: ~{estimated_per_key} bytes")
-        print(f"Total estimated memory: ~{total_memory / 1024:.1f} KB\n")
-
-        self.results["memory"] = {
-            "keys": num_keys,
-            "per_key_bytes": estimated_per_key,
-            "total_kb": total_memory / 1024,
-        }
-
-    async def benchmark_multi_tenant(self):
-        """Test multi-tenant performance."""
-        print("Multi-Tenant Performance Test")
-        print("-" * 50)
-
-        num_tenants = 20 if self.quick else 100
-        requests_per_tenant = 20 if self.quick else 100
-        rate = "1000/minute"
-
-        async def tenant_requests(tenant_id: int, tier: str):
-            """Simulate tenant making requests."""
-            for _ in range(requests_per_tenant):
-                key = f"tenant:{tenant_id}"
-                await self.limiter.check(key=key, rate=rate, tenant_type=tier)
-
-        # Test different tier distributions
-        tiers = ["free"] * 70 + ["premium"] * 25 + ["enterprise"] * 5
-
-        start = time.perf_counter()
-        tasks = [tenant_requests(i, tiers[i % len(tiers)]) for i in range(num_tenants)]
-        await asyncio.gather(*tasks)
-        elapsed = time.perf_counter() - start
-
-        total_requests = num_tenants * requests_per_tenant
-        throughput = total_requests / elapsed
-
-        print(f"Tenants: {num_tenants}")
-        print(f"Total requests: {total_requests}")
-        print(f"Time: {elapsed:.2f}s")
-        print(f"Throughput: {throughput:.1f} req/s\n")
-
-        self.results["multi_tenant"] = {
-            "tenants": num_tenants,
-            "throughput": throughput,
-            "time": elapsed,
-        }
-
-    async def benchmark_algorithm_comparison(self):
-        """
-        Compare all three algorithms: fixed_window, token_bucket, sliding_window.
-
-        Measures latency and throughput for each algorithm.
-        """
-        print("Algorithm Comparison Benchmark")
-        print("-" * 50)
-
+    async def benchmark_algorithm_comparison(self) -> None:
+        """Sequential latency and throughput per rate limiting algorithm."""
         algorithms = ["fixed_window", "token_bucket", "sliding_window"]
-        samples = 200 if self.quick else 1000
-        rate = "100000/minute"  # High limit to avoid rate limiting
+        samples = self.config["algorithm_samples"]
+        trials = self.config["algorithm_trials"]
+        print(f"Algorithm comparison ({samples} samples x {trials} trials, sequential)")
+        print("-" * 60)
+        assert self.limiter is not None
 
         results = {}
+        for algorithm in algorithms:
+            trials_latencies: list[list[float]] = []
+            for _ in range(trials):
+                latencies: list[float] = []
+                for i in range(samples):
+                    start = time.perf_counter()
+                    await self.limiter.check(
+                        key=self.bench_key("algorithm", algorithm, i),
+                        rate=HIGH_RATE,
+                        algorithm=algorithm,
+                    )
+                    latencies.append((time.perf_counter() - start) * 1000.0)
+                trials_latencies.append(latencies)
 
-        for algo in algorithms:
-            latencies = []
-
-            for i in range(samples):
-                key = f"algo-compare-{algo}-{i}"
-                start = time.perf_counter()
-                await self.limiter.check(key=key, rate=rate, algorithm=algo)
-                latency = (time.perf_counter() - start) * 1000  # ms
-                latencies.append(latency)
-
-            latencies.sort()
-
-            results[algo] = {
-                "p50": latencies[int(len(latencies) * 0.50)],
-                "p99": latencies[int(len(latencies) * 0.99)],
-                "throughput": samples / sum(latencies) * 1000,  # req/s
-            }
-
+            stats = latency_summary(trials_latencies)
+            throughput = summarize(
+                [len(trial) / (sum(trial) / 1000.0) for trial in trials_latencies]
+            )
+            stats["throughput_req_s"] = throughput
+            results[algorithm] = stats
+            pooled = stats["pooled_ms"]
             print(
-                f"{algo:15} | p50: {results[algo]['p50']:.2f}ms | "
-                f"p99: {results[algo]['p99']:.2f}ms | "
-                f"{results[algo]['throughput']:.0f} req/s"
+                f"  {algorithm:15} | p50 {pooled['p50']:6.3f}ms | p99 {pooled['p99']:6.3f}ms | "
+                f"{throughput['mean']:7,.0f} ± {throughput['stdev']:7,.0f} req/s"
             )
 
-        self.results["algorithm_comparison"] = results
+        self.results["algorithms"] = results
         print()
 
-    async def benchmark_accuracy_under_load(self):
+    async def benchmark_accuracy_under_load(self) -> None:
+        """Accuracy under a concurrent burst, compared to analytic expectations.
+
+        Fires ``multiplier * limit`` concurrent requests against a fresh key
+        at ``limit/second``. Window algorithms refill nothing mid-window, so
+        the analytic expectation is exactly ``limit`` accepts while the burst
+        stays inside one window. The token bucket refills continuously, so
+        the analytic expectation is ``limit + refill_rate * burst_span``;
+        the observed count must fall inside that analytic band.
         """
-        Test rate limiting accuracy under concurrent load.
+        limit = self.config["accuracy_limit"]
+        total = limit * self.config["accuracy_multiplier"]
+        rate = f"{limit}/second"
+        print(f"Accuracy under load (burst of {total} concurrent, limit {limit}/second)")
+        print("-" * 60)
+        assert self.limiter is not None
+        assert self.probe is not None
 
-        Verifies that exactly the limit number of requests are allowed,
-        no more, no less.
-        """
-        print("Accuracy Under Load Test")
-        print("-" * 50)
+        algorithm_results = {}
+        for algorithm in ("fixed_window", "token_bucket", "sliding_window"):
+            key = self.bench_key("accuracy", algorithm)
 
-        test_cases = [
-            ("fixed_window", 50),
-            ("token_bucket", 50),
-            ("sliding_window", 50),
-        ]
-
-        all_passed = True
-
-        for algo, limit in test_cases:
-            test_key = f"accuracy-{algo}-{datetime.now(timezone.utc).isoformat()}"
-            test_rate = f"{limit}/second"
-            test_algo = algo
-
-            async def make_request(k=test_key, r=test_rate, a=test_algo):
+            async def attempt(k: str = key, a: str = algorithm) -> bool:
                 try:
-                    return await self.limiter.check(key=k, rate=r, algorithm=a)
+                    return await self.limiter.check(key=k, rate=rate, algorithm=a)
                 except RateLimitExceeded:
                     return False
 
-            # Send 4x the limit concurrently
-            tasks = [make_request() for _ in range(limit * 4)]
-            results = await asyncio.gather(*tasks)
+            start_s, start_us = await self.probe.time()
+            allowed = sum(await asyncio.gather(*[attempt() for _ in range(total)]))
+            end_s, end_us = await self.probe.time()
+            span = (end_s - start_s) + (end_us - start_us) / 1_000_000.0
+            windows_touched = int(end_s) - int(start_s) + 1
 
-            allowed = sum(1 for r in results if r is True)
-            accuracy = (allowed / limit) * 100
-            passed = allowed == limit
+            if algorithm == "token_bucket":
+                # Bucket starts full; only the refill inside the burst adds
+                # capacity. The Redis clock span measured here brackets the
+                # span the script saw, so the band is a defensible bound.
+                refill_per_second = limit / 1.0
+                expected_low = limit
+                expected_high = math.ceil(limit + refill_per_second * span) + 1
+                expected_point = round(limit + refill_per_second * span, 2)
+            else:
+                # No mid-window refill; a boundary crossing starts a fresh
+                # window with another ``limit`` requests of capacity.
+                expected_low = limit
+                expected_high = limit * windows_touched
+                expected_point = limit if windows_touched == 1 else None
 
-            status = "✅" if passed else "❌"
+            passed = expected_low <= allowed <= expected_high
+            algorithm_results[algorithm] = {
+                "allowed": allowed,
+                "denied": total - allowed,
+                "expected_point": expected_point,
+                "expected_low": expected_low,
+                "expected_high": expected_high,
+                "burst_span_seconds": round(span, 4),
+                "windows_touched": windows_touched,
+                "pass": passed,
+            }
+            marker = "ok" if passed else "FAIL"
             print(
-                f"{status} {algo:15} | Limit {limit}: {allowed}/{limit} allowed "
-                f"({accuracy:.1f}% accurate)"
+                f"  [{marker}] {algorithm:15} allowed {allowed:3} | analytic band "
+                f"[{expected_low}, {expected_high}]"
             )
 
-            if not passed:
-                all_passed = False
-
-        self.results["accuracy"] = {
-            "all_passed": all_passed,
-        }
-
-        # Check target
-        self._check_target(
-            "accuracy_percent",
-            100.0 if all_passed else 0.0,
-            self.TARGETS["accuracy_percent"],
-            higher_is_better=True,
-        )
-
+        self.results["accuracy_under_load"] = algorithm_results
         print()
 
-    def print_summary(self):
-        """Print benchmark summary."""
-        print("=" * 60)
-        print("BENCHMARK SUMMARY")
-        print("=" * 60)
+    async def benchmark_memory_usage(self) -> None:
+        """Real per-key memory from Redis MEMORY USAGE, per algorithm."""
+        identities = self.config["memory_identities"]
+        rate = "100/minute"
+        print(f"Memory usage (MEMORY USAGE over {identities} identities per algorithm)")
+        print("-" * 60)
+        assert self.limiter is not None
+        assert self.probe is not None
 
-        if "throughput" in self.results:
-            t = self.results["throughput"]
-            seq_status = (
-                "✅"
-                if self._check_target(
-                    "throughput_sequential", t["sequential"], self.TARGETS["throughput_sequential"]
-                )
-                else "❌"
-            )
-            con_status = (
-                "✅"
-                if self._check_target(
-                    "throughput_concurrent", t["concurrent"], self.TARGETS["throughput_concurrent"]
-                )
-                else "❌"
-            )
-            print(
-                f"{seq_status} Sequential Throughput: {t['sequential']:.1f} req/s "
-                f"(target: >{self.TARGETS['throughput_sequential']})"
-            )
-            print(
-                f"{con_status} Concurrent Throughput: {t['concurrent']:.1f} req/s "
-                f"(target: >{self.TARGETS['throughput_concurrent']})"
-            )
-
-        if "latency" in self.results:
-            lat = self.results["latency"]
-            p50_status = (
-                "✅"
-                if self._check_target(
-                    "p50_latency_ms",
-                    lat["median"],
-                    self.TARGETS["p50_latency_ms"],
-                    higher_is_better=False,
-                )
-                else "❌"
-            )
-            p99_status = (
-                "✅"
-                if self._check_target(
-                    "p99_latency_ms",
-                    lat["p99"],
-                    self.TARGETS["p99_latency_ms"],
-                    higher_is_better=False,
-                )
-                else "❌"
-            )
-            print(
-                f"{p50_status} p50 Latency: {lat['median']:.2f}ms "
-                f"(target: <{self.TARGETS['p50_latency_ms']}ms)"
-            )
-            print(
-                f"{p99_status} p99 Latency: {lat['p99']:.2f}ms "
-                f"(target: <{self.TARGETS['p99_latency_ms']}ms)"
-            )
-
-        if "algorithm_comparison" in self.results:
-            print("\nAlgorithm Performance:")
-            for algo, stats in self.results["algorithm_comparison"].items():
-                print(
-                    f"  {algo:15} | p50: {stats['p50']:.2f}ms | "
-                    f"p99: {stats['p99']:.2f}ms | {stats['throughput']:.0f} req/s"
+        algorithms = ["fixed_window", "token_bucket", "sliding_window"]
+        results = {}
+        for algorithm in algorithms:
+            for i in range(identities):
+                await self.limiter.check(
+                    key=self.bench_key("memory", algorithm, i), rate=rate, algorithm=algorithm
                 )
 
-        if "accuracy" in self.results:
-            acc = self.results["accuracy"]
-            status = "✅" if acc["all_passed"] else "❌"
-            acc_msg = "All tests passed" if acc["all_passed"] else "Some tests failed"
-            print(f"\n{status} Accuracy: {acc_msg}")
+            # Sliding window keeps one key per window boundary per identity,
+            # so measure every key the run created and report both per-key
+            # and per-identity bytes.
+            pattern = self.redis_key_pattern("memory", algorithm)
+            keys = [key async for key in self.probe.scan_iter(match=pattern, count=500)]
+            usages: list[int] = []
+            for chunk_start in range(0, len(keys), 1000):
+                chunk = keys[chunk_start : chunk_start + 1000]
+                pipe = self.probe.pipeline()
+                for key in chunk:
+                    pipe.memory_usage(key)
+                usages.extend(value for value in await pipe.execute() if value is not None)
 
-        if "concurrent_clients" in self.results:
-            max_clients = self.results["concurrent_clients"][-1]
+            total_bytes = sum(usages)
+            results[algorithm] = {
+                "identities": identities,
+                "keys": len(keys),
+                "keys_per_identity": round(len(keys) / identities, 3),
+                "bytes_per_key": summarize(usages),
+                "bytes_per_identity": round(total_bytes / identities, 1),
+                "measured_via": "MEMORY USAGE",
+            }
+            bpk = results[algorithm]["bytes_per_key"]
             print(
-                f"\nConcurrent clients: {max_clients['clients']} "
-                f"@ {max_clients['throughput']:.1f} req/s"
+                f"  {algorithm:15} | {len(keys):5} keys | per key {bpk['mean']:6.1f} ± "
+                f"{bpk['stdev']:5.1f} bytes (median {bpk['median']:6.1f}) | "
+                f"per identity {results[algorithm]['bytes_per_identity']:6.1f} bytes"
             )
 
-        if "multi_tenant" in self.results:
-            mt = self.results["multi_tenant"]
-            print(f"Multi-tenant: {mt['tenants']} tenants " f"@ {mt['throughput']:.1f} req/s")
+        self.results["memory"] = results
+        print()
 
-        # Final status
-        print("\n" + "=" * 60)
-        passed = len(self.passed_targets)
-        failed = len(self.failed_targets)
-        total = passed + failed
+    async def benchmark_pool_capacity(self) -> None:
+        """Probe the default connection pool under rising true concurrency.
 
-        if failed == 0:
-            print(f"✅ ALL TARGETS PASSED ({passed}/{total})")
-        else:
-            print(f"❌ SOME TARGETS FAILED ({passed}/{total} passed)")
-            print(f"   Failed: {', '.join(self.failed_targets)}")
+        The shipped default pool (max_connections=50) uses redis-py's
+        non-blocking pool, which raises ``Too many connections`` once more
+        checks are in flight than the pool allows. This records where that
+        boundary lands, as shipped, instead of hiding it behind a raised
+        pool elsewhere in this run.
+        """
+        levels = [25, 50, 75, 100, 200]
+        checks_per_level = 1000
+        print(f"Default pool capacity probe (levels {levels}, {checks_per_level} checks)")
+        print("-" * 60)
+
+        from moderato import BackendError
+
+        probe_limiter = RateLimiter(redis_url=self.redis_url)
+        await probe_limiter.connect()
+        try:
+            rows = []
+            for num_clients in levels:
+                outcomes: dict[str, int] = {}
+
+                async def guarded(
+                    i: int,
+                    level: int = num_clients,
+                    tally: dict[str, int] = outcomes,
+                ) -> None:
+                    try:
+                        await probe_limiter.check(
+                            key=self.bench_key("pool", level, i), rate=HIGH_RATE
+                        )
+                        tally["ok"] = tally.get("ok", 0) + 1
+                    except BackendError as exc:
+                        cause = exc.__cause__.__class__.__name__ if exc.__cause__ else "error"
+                        tally[cause] = tally.get(cause, 0) + 1
+
+                await asyncio.gather(*[guarded(i) for i in range(checks_per_level)])
+                row = {"clients": num_clients, "outcomes": outcomes}
+                rows.append(row)
+                print(f"  {num_clients:4} concurrent: {outcomes}")
+
+            self.results["pool_capacity"] = {
+                "default_max_connections": 50,
+                "checks_per_level": checks_per_level,
+                "levels": rows,
+            }
+        finally:
+            await probe_limiter.close()
+        print()
+
+    async def benchmark_multi_tenant(self) -> None:
+        """Concurrent checks across many tenants and tenant types."""
+        tenants = self.config["tenant_count"]
+        per_tenant = self.config["tenant_requests_per_tenant"]
+        trials = self.config["tenant_trials"]
+        rate = "1000/minute"
+        print(f"Multi-tenant ({tenants} tenants x {per_tenant} requests x {trials} trials)")
+        print("-" * 60)
+        assert self.limiter is not None
+
+        # Tier distribution: 70% free, 25% premium, 5% enterprise.
+        tiers = ["free"] * 70 + ["premium"] * 25 + ["enterprise"] * 5
+        rates: list[float] = []
+
+        async def tenant_requests(tenant_id: int, trial: int, tier: str) -> None:
+            for _ in range(per_tenant):
+                await self.limiter.check(
+                    key=self.bench_key("tenant", trial, tenant_id),
+                    rate=rate,
+                    tenant_type=tier,
+                )
+
+        for trial in range(trials):
+            start = time.perf_counter()
+            await asyncio.gather(
+                *[
+                    tenant_requests(i % tenants, trial, tiers[i % len(tiers)])
+                    for i in range(tenants)
+                ]
+            )
+            elapsed = time.perf_counter() - start
+            rates.append((tenants * per_tenant) / elapsed)
+            print(f"  trial {trial + 1}/{trials}: {rates[-1]:,.1f} req/s")
+
+        self.results["multi_tenant"] = {
+            "tenants": tenants,
+            "requests_per_trial": tenants * per_tenant,
+            "throughput_req_s": summarize(rates),
+        }
+        th = self.results["multi_tenant"]["throughput_req_s"]
+        print(f"  throughput: {th['mean']:,.1f} ± {th['stdev']:,.1f} req/s\n")
+
+    # -- output ---------------------------------------------------------------
+
+    def collect_environment(self) -> dict[str, Any]:
+        """Environment metadata so results can be compared across machines."""
+        info = self.redis_info
+        return {
+            "platform": platform.system(),
+            "cpu_model": _read_cpu_model(),
+            "cpu_count": _logical_cpu_count(),
+            "ram_total_mib": _read_total_ram_mib(),
+            "kernel": platform.release(),
+            "python_version": platform.python_version(),
+            "python_implementation": platform.python_implementation(),
+            "redis_version": info.get("redis_version") if info else None,
+            "redis_mode": info.get("redis_mode") if info else None,
+            "redis_url_host": urlparse(self.redis_url).hostname,
+            "redis_placement": _redis_placement(self.redis_url),
+            "moderato_version": _moderato_version(),
+        }
+
+    async def run(self) -> None:
+        await self.setup()
+        try:
+            assert self.probe is not None
+            self.redis_info = dict(await self.probe.info("server"))
+            await self.benchmark_throughput()
+            await self.benchmark_latency()
+            await self.benchmark_algorithm_comparison()
+            await self.benchmark_accuracy_under_load()
+            await self.benchmark_memory_usage()
+            await self.benchmark_pool_capacity()
+            await self.benchmark_concurrency_sweep()
+            await self.benchmark_multi_tenant()
+        finally:
+            await self.teardown()
+
+    def to_json(self, started_at: datetime) -> dict[str, Any]:
+        ended_at = datetime.now(timezone.utc)
+        return {
+            "schema_version": 1,
+            "benchmark": "moderato-performance",
+            "profile": self.profile,
+            "run_id": self.run_id,
+            "started_at_utc": started_at.isoformat(),
+            "ended_at_utc": ended_at.isoformat(),
+            "duration_seconds": round((ended_at - started_at).total_seconds(), 2),
+            "redis_url_host": urlparse(self.redis_url).hostname,
+            "environment": self.collect_environment(),
+            "configuration": {
+                **dict(self.config),
+                "connection_pool_size": self.pool_size,
+                "connection_pool_note": (
+                    "raised from the default 50 via RateLimitConfig.max_connections so "
+                    "high-concurrency levels measure the limiter; the default-pool "
+                    "boundary is measured in results.pool_capacity"
+                ),
+            },
+            "results": self.results,
+        }
 
 
-async def main(quick: bool = False):
-    """Run all benchmarks."""
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+def _moderato_version() -> str:
+    from moderato import __version__
 
-    benchmark = PerformanceBenchmark(redis_url, quick=quick)
+    return __version__
+
+
+async def main(quick: bool, trials: Optional[int], run_id: str, json_path: Path) -> None:
+    redis_url = os.getenv("REDIS_URL", REDIS_URL_DEFAULT)
+    profile = "quick" if quick else "full"
+    config = dict(QUICK_PROFILE if quick else FULL_PROFILE)
+    if trials is not None:
+        for key in config:
+            if key.endswith("_trials"):
+                config[key] = trials
+
+    started_at = datetime.now(timezone.utc)
+    benchmark = PerformanceBenchmark(redis_url, profile, config, run_id)
 
     try:
-        await benchmark.setup()
-
-        # Run benchmarks
-        await benchmark.benchmark_throughput()
-        await benchmark.benchmark_latency()
-        await benchmark.benchmark_algorithm_comparison()
-        await benchmark.benchmark_accuracy_under_load()
-
-        if not quick:
-            await benchmark.benchmark_concurrent_clients()
-            await benchmark.benchmark_rate_limiting_accuracy()
-            await benchmark.benchmark_memory_usage()
-            await benchmark.benchmark_multi_tenant()
-
-        # Print summary
-        benchmark.print_summary()
-
-    except Exception as e:
-        print(f"\nBenchmark failed: {e}")
+        await benchmark.run()
+    except Exception as exc:
+        print(f"\nBenchmark failed: {exc}")
         raise
-    finally:
-        await benchmark.teardown()
+
+    payload = benchmark.to_json(started_at)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(payload, indent=2) + "\n")
+    print(f"Machine-readable results: {json_path}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Moderato Performance Benchmarks")
+    parser = argparse.ArgumentParser(description="Moderato performance benchmarks")
+    parser.add_argument("--quick", action="store_true", help="Reduced sizes for local smoke runs")
+    parser.add_argument("--trials", type=int, default=None, help="Override trial counts")
     parser.add_argument(
-        "--quick", action="store_true", help="Run quick benchmark with fewer iterations"
+        "--run-id", default=None, help="Deterministic run id used in Redis keys (default: UTC now)"
+    )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        help="JSON output path (default: benchmarks/results/<profile>-<run-id>.json)",
     )
     args = parser.parse_args()
 
-    asyncio.run(main(quick=args.quick))
+    resolved_run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    output = args.json or Path("benchmarks/results") / (
+        f"{'quick' if args.quick else 'full'}-{resolved_run_id}.json"
+    )
+    asyncio.run(
+        main(quick=args.quick, trials=args.trials, run_id=resolved_run_id, json_path=output)
+    )

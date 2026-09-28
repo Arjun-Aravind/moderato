@@ -71,10 +71,11 @@ dump.rdb
 *.log
 logs/
 
-# Benchmarks output
-benchmarks/results/
+# Benchmarks: plot scratch output is ignored; machine-readable results under
+# benchmarks/results/ are committed as the evidence behind BENCHMARKS.md.
 benchmarks/*.html
 benchmarks/*.png
+benchmarks/.venv-compare/
 
 # Documentation build
 docs/_build/

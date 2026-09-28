@@ -24,7 +24,9 @@ A raw Redis floor (one and two EVALSHA round trips per request) is measured
 so library numbers can be read as client-bound vs Redis-bound.
 
 The competitor libraries are installed into an isolated virtualenv
-(benchmarks/.venv-compare by default), never as main dependencies:
+(benchmarks/.venv-compare by default), never as main dependencies. The
+harness never flushes the Redis database: every library's keys are namespaced
+under a run-specific prefix and only those keys are deleted.
 
     python benchmarks/compare_libraries.py             # bootstraps venv, runs
     python benchmarks/compare_libraries.py --trials 1  # quick smoke run
@@ -41,10 +43,10 @@ import statistics
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -70,45 +72,48 @@ LIMITED_PER_MINUTE = 100
 
 DEFAULT_VENV = REPO_ROOT / "benchmarks" / ".venv-compare"
 
-AppBuilder = Callable[[str, int], Any]
+AppBuilder = Callable[[str, int, str], Any]
+StateReset = Callable[[], Awaitable[None]]
 
 
 def venv_python_path(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
-def venv_has_packages(venv_python: Path) -> bool:
-    """True when the venv already has every package the comparison imports."""
-    check = (
-        "import fastapi, httpx, slowapi, fastapi_limiter," " pyrate_limiter, redis, pydantic, anyio"
+def venv_matches_pins(venv_python: Path) -> bool:
+    """True when the venv has every pinned package at exactly the pinned version."""
+    pins = {p.split("==")[0]: p.split("==")[1] for p in PINNED_PACKAGES}
+    script = (
+        "import json, importlib.metadata as m; "
+        f"pins = {pins!r}; "
+        "print(json.dumps({n: m.version(n) for n in pins}))"
     )
-    result = subprocess.run(
-        [str(venv_python), "-c", check],
-        capture_output=True,
-    )
-    return result.returncode == 0
+    result = subprocess.run([str(venv_python), "-c", script], capture_output=True)
+    if result.returncode != 0:
+        return False
+    try:
+        installed = json.loads(result.stdout.decode().strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return False
+    return installed == pins
 
 
 def ensure_venv(venv_dir: Path) -> Path:
     """Return a python interpreter inside an isolated venv with competitors.
 
-    Creates the venv on first use (uv if available, otherwise venv+pip) so
-    the comparison never installs competitors into the main environment.
+    Creates the venv on first use (uv if available, otherwise venv+pip) and
+    reinstalls the pinned set whenever the existing venv drifts from it, so
+    the comparison never runs arbitrary local versions and never installs
+    competitors into the main environment.
     """
     venv_python = venv_python_path(venv_dir)
-    if venv_python.exists() and venv_has_packages(venv_python):
+    if venv_python.exists() and venv_matches_pins(venv_python):
         return venv_python
 
     print(f"Bootstrapping isolated comparison venv at {venv_dir} ...")
     if shutil.which("uv"):
         subprocess.run(
-            [
-                "uv",
-                "venv",
-                str(venv_dir),
-                "--python",
-                platform.python_version(),
-            ],
+            ["uv", "venv", str(venv_dir), "--python", platform.python_version()],
             check=True,
         )
         installer: list[str] = ["uv", "pip", "install", "--python", str(venv_python)]
@@ -119,21 +124,24 @@ def ensure_venv(venv_dir: Path) -> Path:
         installer = [str(venv_python), "-m", "pip", "install"]
 
     subprocess.run([*installer, *PINNED_PACKAGES], check=True)
-    if not venv_has_packages(venv_python):
-        raise RuntimeError("comparison venv is missing packages after bootstrap")
+    if not venv_matches_pins(venv_python):
+        raise RuntimeError("comparison venv does not match the pinned package set")
     return venv_python
 
 
 # -- app builders (run inside the comparison venv) ---------------------------
+#
+# Every builder namespaces its keys under ``key_prefix`` so the harness can
+# delete exactly what it created, on a possibly shared Redis database.
 
 
-async def build_moderato_app(redis_url: str, limit_per_minute: int):
+async def build_moderato_app(redis_url: str, limit_per_minute: int, key_prefix: str):
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
 
     from moderato import RateLimitCallbackError, RateLimiter, RateLimitExceeded
 
-    limiter = RateLimiter(redis_url=redis_url)
+    limiter = RateLimiter(redis_url=redis_url, key_prefix=key_prefix)
     app = FastAPI()
 
     @app.exception_handler(RateLimitExceeded)
@@ -156,13 +164,17 @@ async def build_moderato_app(redis_url: str, limit_per_minute: int):
     return app
 
 
-async def build_slowapi_app(redis_url: str, limit_per_minute: int):
+async def build_slowapi_app(redis_url: str, limit_per_minute: int, key_prefix: str):
     from fastapi import FastAPI, Request
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.errors import RateLimitExceeded as SlowAPIRateLimitExceeded
     from slowapi.util import get_remote_address
 
-    limiter = Limiter(key_func=get_remote_address, storage_uri=redis_url)
+    limiter = Limiter(
+        key_func=get_remote_address,
+        storage_uri=redis_url,
+        key_prefix=f"{key_prefix}-",
+    )
     app = FastAPI()
     app.state.limiter = limiter
     app.add_exception_handler(SlowAPIRateLimitExceeded, _rate_limit_exceeded_handler)
@@ -175,7 +187,7 @@ async def build_slowapi_app(redis_url: str, limit_per_minute: int):
     return app
 
 
-async def build_fastapi_limiter_app(redis_url: str, limit_per_minute: int):
+async def build_fastapi_limiter_app(redis_url: str, limit_per_minute: int, key_prefix: str):
     import redis.asyncio as redis
     from fastapi import Depends, FastAPI, Request
     from fastapi_limiter.depends import RateLimiter
@@ -185,7 +197,7 @@ async def build_fastapi_limiter_app(redis_url: str, limit_per_minute: int):
     bucket = await RedisBucket.init(
         rates=[Rate(limit_per_minute, Duration.MINUTE)],
         redis=client,
-        bucket_key="bench:compare:pyrate",
+        bucket_key=f"{key_prefix}-pyrate",
         algorithm=FixedWindow(),
     )
     limiter = _pyrate_limiter(bucket)
@@ -198,13 +210,7 @@ async def build_fastapi_limiter_app(redis_url: str, limit_per_minute: int):
     return app
 
 
-def _pyrate_limiter(bucket: Any) -> Any:
-    from pyrate_limiter import Limiter
-
-    return Limiter(bucket)
-
-
-async def build_plain_app(redis_url: str, limit_per_minute: int):
+async def build_plain_app(redis_url: str, limit_per_minute: int, key_prefix: str):
     """Same app shape with no rate limiting: the shared baseline overhead."""
     from fastapi import FastAPI, Request
 
@@ -215,6 +221,12 @@ async def build_plain_app(redis_url: str, limit_per_minute: int):
         return {"msg": "ok"}
 
     return app
+
+
+def _pyrate_limiter(bucket: Any) -> Any:
+    from pyrate_limiter import Limiter
+
+    return Limiter(bucket)
 
 
 APP_BUILDERS: dict[str, AppBuilder] = {
@@ -228,14 +240,37 @@ APP_BUILDERS: dict[str, AppBuilder] = {
 # -- measurement --------------------------------------------------------------
 
 
+async def delete_owned_keys(redis_client: Any, key_prefix: str) -> int:
+    """Delete every key this run owns, identified by its unique prefix.
+
+    Never touches anything else on the (possibly shared) database.
+    """
+    pattern = f"*{key_prefix}*"
+    deleted = 0
+    batch: list[str] = []
+    async for key in redis_client.scan_iter(match=pattern, count=500):
+        batch.append(key)
+        if len(batch) >= 500:
+            deleted += await redis_client.delete(*batch)
+            batch = []
+    if batch:
+        deleted += await redis_client.delete(*batch)
+    return deleted
+
+
 async def measure_app(
     app: Any,
     *,
+    reset_state: StateReset,
     levels: Sequence[int],
     requests_per_trial: int,
     trials: int,
 ) -> dict[str, Any]:
-    """Drive one app through the shared in-process client at each concurrency."""
+    """Drive one app through the shared in-process client at each concurrency.
+
+    ``reset_state`` runs between levels so each level starts from a fresh
+    quota and the limited-path allow counts reproduce across runs.
+    """
     import httpx
 
     rows = []
@@ -246,6 +281,7 @@ async def measure_app(
             (await client.get("/")).raise_for_status()
 
         for num_clients in levels:
+            await reset_state()
             per_client = requests_per_trial // num_clients
             rates: list[float] = []
             latencies: list[float] = []
@@ -389,9 +425,13 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     from moderato import __version__
 
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    key_prefix = f"bench-compare-{args.run_id}"
     started_at = datetime.now(timezone.utc)
     redis_client = redis.from_url(redis_url, decode_responses=True)
     await redis_client.ping()
+
+    async def reset_state() -> None:
+        await delete_owned_keys(redis_client, key_prefix)
 
     results: dict[str, Any] = {
         "schema_version": 1,
@@ -417,7 +457,15 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
             "requests_per_trial": REQUESTS_PER_TRIAL,
             "trials": args.trials,
             "levels": LEVELS,
-            "redis_state": "flushdb before each (library, scenario) so every run starts empty",
+            "redis_state": (
+                "every library's keys are namespaced under a run-specific prefix; those "
+                "keys are deleted between levels and between (library, scenario) pairs, "
+                "so each level starts from a fresh quota and the database is never flushed"
+            ),
+            "limited_scenario_note": (
+                "the first 20 warm-up requests consume part of the quota, so timed "
+                "allowances at 1 client are limit minus warm-up"
+            ),
             "note": "compares libraries as-shipped per their documented usage",
         },
         "scenarios": {},
@@ -435,18 +483,19 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     try:
         for scenario, limit in scenarios.items():
             for name, builder in APP_BUILDERS.items():
-                await redis_client.flushdb()
+                await reset_state()
                 print(f"\nScenario {scenario} | {name}")
-                app = await builder(redis_url, limit)
+                app = await builder(redis_url, limit, key_prefix)
                 measured = await measure_app(
                     app,
+                    reset_state=reset_state,
                     levels=LEVELS,
                     requests_per_trial=REQUESTS_PER_TRIAL,
                     trials=args.trials,
                 )
                 results["scenarios"][f"{scenario}/{name}"] = measured
     finally:
-        await redis_client.flushdb()
+        await reset_state()
         await redis_client.aclose()
 
     ended_at = datetime.now(timezone.utc)
@@ -502,7 +551,8 @@ if __name__ == "__main__":
     target_python = ensure_venv(parsed.venv)
     # Compare paths WITHOUT resolving symlinks: both venv pythons may symlink
     # to the same base interpreter, which would wrongly skip the re-exec.
-    if os.path.abspath(sys.executable) != str(target_python):
+    # Both sides are made absolute so a relative --venv cannot loop forever.
+    if os.path.abspath(sys.executable) != os.path.abspath(str(target_python)):
         os.execv(
             str(target_python),
             [str(target_python), str(Path(__file__).resolve()), *sys.argv[1:]],

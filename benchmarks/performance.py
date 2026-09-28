@@ -25,6 +25,7 @@ import json
 import math
 import os
 import platform
+import re
 import statistics
 import sys
 import time
@@ -239,7 +240,10 @@ class PerformanceBenchmark:
         self.probe = redis.from_url(self.redis_url, decode_responses=True)
         await self.probe.ping()
         swept = await self._delete_bench_keys()
-        print(f"Connected to Redis at {self.redis_url} (run id: {self.run_id})")
+        # Hostname only: the URL may embed a password.
+        print(
+            f"Connected to Redis at {urlparse(self.redis_url).hostname}" f" (run id: {self.run_id})"
+        )
         print(
             f"Limiter connection pool raised to {self.pool_size} "
             f"(default 50) for the concurrency sections"
@@ -551,11 +555,14 @@ class PerformanceBenchmark:
     async def benchmark_pool_capacity(self) -> None:
         """Probe the default connection pool under rising true concurrency.
 
-        The shipped default pool (max_connections=50) uses redis-py's
-        non-blocking pool, which raises ``Too many connections`` once more
-        checks are in flight than the pool allows. This records where that
-        boundary lands, as shipped, instead of hiding it behind a raised
-        pool elsewhere in this run.
+        The shipped default pool (max_connections=50) rejects a borrow once
+        no connection is idle and all 50 are checked out (redis-py raises
+        ``Too many connections``). This probe splits 1,000 checks across
+        ``num_clients`` workers so exactly ``num_clients`` checks are in
+        flight, and records both rejections and the observed peak pool
+        usage per level: on a localhost Redis each check completes before
+        many workers overlap, so the boundary is timing- and
+        deployment-dependent rather than a fixed client count.
         """
         levels = [25, 50, 75, 100, 200]
         checks_per_level = 1000
@@ -566,29 +573,67 @@ class PerformanceBenchmark:
 
         probe_limiter = RateLimiter(redis_url=self.redis_url)
         await probe_limiter.connect()
+        # Instrument the backend's redis-py pool to observe peak usage; the
+        # wrappers delegate to the originals and are not restored because the
+        # probe limiter is closed below and used by nothing else.
+        backend_pool = getattr(
+            getattr(probe_limiter.backend, "_redis", None), "connection_pool", None
+        )
+        orig_get = getattr(backend_pool, "get_available_connection", None)
+        orig_release = getattr(backend_pool, "release", None)
+        instrumented = (
+            backend_pool is not None and orig_get is not None and orig_release is not None
+        )
+        pool_stats: dict[str, int] = {"in_use": 0, "peak": 0}
+        if instrumented:
+
+            def _get_available_connection() -> Any:
+                conn = orig_get()
+                pool_stats["in_use"] += 1
+                pool_stats["peak"] = max(pool_stats["peak"], pool_stats["in_use"])
+                return conn
+
+            async def _release(conn: Any) -> Any:
+                pool_stats["in_use"] -= 1
+                return await orig_release(conn)
+
+            backend_pool.get_available_connection = _get_available_connection  # type: ignore[assignment]
+            backend_pool.release = _release  # type: ignore[assignment]
         try:
             rows = []
             for num_clients in levels:
                 outcomes: dict[str, int] = {}
+                pool_stats["in_use"] = 0
+                pool_stats["peak"] = 0
 
-                async def guarded(
-                    i: int,
+                async def worker(
+                    worker_id: int,
                     level: int = num_clients,
                     tally: dict[str, int] = outcomes,
                 ) -> None:
-                    try:
-                        await probe_limiter.check(
-                            key=self.bench_key("pool", level, i), rate=HIGH_RATE
-                        )
-                        tally["ok"] = tally.get("ok", 0) + 1
-                    except BackendError as exc:
-                        cause = exc.__cause__.__class__.__name__ if exc.__cause__ else "error"
-                        tally[cause] = tally.get(cause, 0) + 1
+                    # Stride the check indexes across workers so exactly
+                    # ``level`` checks are in flight at a time; scheduling all
+                    # checks as one coroutine wave would never vary concurrency.
+                    for i in range(worker_id, checks_per_level, level):
+                        try:
+                            await probe_limiter.check(
+                                key=self.bench_key("pool", level, i), rate=HIGH_RATE
+                            )
+                            tally["ok"] = tally.get("ok", 0) + 1
+                        except BackendError as exc:
+                            cause = exc.__cause__.__class__.__name__ if exc.__cause__ else "error"
+                            tally[cause] = tally.get(cause, 0) + 1
 
-                await asyncio.gather(*[guarded(i) for i in range(checks_per_level)])
-                row = {"clients": num_clients, "outcomes": outcomes}
+                await asyncio.gather(*[worker(w) for w in range(num_clients)])
+                row: dict[str, Any] = {
+                    "clients": num_clients,
+                    "outcomes": outcomes,
+                    "peak_in_use_connections": pool_stats["peak"] if instrumented else None,
+                }
                 rows.append(row)
-                print(f"  {num_clients:4} concurrent: {outcomes}")
+                limit = probe_limiter.config.max_connections
+                peak = f"{pool_stats['peak']}/{limit}" if instrumented else "n/a"
+                print(f"  {num_clients:4} concurrent: {outcomes} (peak pool in use: {peak})")
 
             self.results["pool_capacity"] = {
                 "default_max_connections": 50,
@@ -748,6 +793,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     resolved_run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # The run id becomes part of Redis key components; moderato hashes
+    # components over 100 chars, which would break the run's SCAN cleanup.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", resolved_run_id):
+        parser.error("--run-id must match [A-Za-z0-9._-]{1,64}")
     output = args.json or Path("benchmarks/results") / (
         f"{'quick' if args.quick else 'full'}-{resolved_run_id}.json"
     )

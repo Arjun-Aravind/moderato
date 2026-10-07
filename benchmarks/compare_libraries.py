@@ -505,7 +505,11 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
         "versions": {**installed_versions(), "moderato": __version__},
         "methodology": {
             "transport": "httpx ASGITransport (in-process ASGI, no network)",
-            "app_shape": ('single GET / returning {"msg": "ok"}, per-IP keying, client 127.0.0.1'),
+            "app_shape": (
+                'single GET / returning {"msg": "ok"}, one client identity '
+                "127.0.0.1 (the app keys per IP; fastapi-limiter, as wired here, "
+                "uses a shared route bucket instead)"
+            ),
             "requests_per_trial": REQUESTS_PER_TRIAL,
             "trials": args.trials,
             "levels": LEVELS,

@@ -146,9 +146,10 @@ long before Redis does.
 
 ### Algorithm comparison
 
-1,000 sequential samples × 3 trials per algorithm. On this workload the
-three algorithms cost about the same; all execute one Lua script per
-decision.
+1,000 sequential samples × 3 trials per algorithm. Fixed window is now
+60–75% faster than the other two: its window selection runs inside the Lua
+script (one `EVALSHA` per check), while token bucket and sliding window
+still read server time in a separate round trip before the script.
 
 | Algorithm | Run 1 throughput | Run 1 p50 / p99 | Run 2 throughput | Run 2 p50 / p99 |
 | --- | --- | --- | --- | --- |
@@ -180,14 +181,16 @@ window apart, then every key still alive is measured:
 | sliding_window | 2.0 | 168.0 ± 0.0 | 336.0 |
 
 Identical across both runs. The ± here is the spread across keys, not
-across trials. One key-name artifact to read past: the token bucket's hash
-is allocated in 184 B for key names of up to 92 characters and 200 B for
-93 or more (observed directly: 100 keys at 184 B, 3,900 at 200 B, split
-exactly on key length). Identity numbers 0–99 produce the shorter names in
-the one-check table, and the steady-state pass uses a shorter policy
-component (`p100x1` vs `p100x60`), which puts all of its keys at 184 B. The
+across trials. One key-name artifact to read past: `MEMORY USAGE` rises in
+32-byte allocator steps as the key name grows, and the token bucket's
+dict-encoded hash sits on one of those steps. Reproduced directly: a
+token-bucket key whose full Redis name is 90 characters measures 184 B,
+the same key at 95 characters measures 200 B. These runs use the run ids
+`20261007T-postmerge5/6`, whose names land past that step, so every
+token-bucket key measures 200 B; the earlier committed runs
+(`full3/4`, five characters shorter) show the split directly. The
 capacity-relevant numbers are the bytes-per-identity columns: between
-window boundaries a sliding-window identity holds two keys (~304 B) until
+window boundaries a sliding-window identity holds two keys (336 B) until
 its previous-window key expires, while the other algorithms hold one. A
 one-check measurement alone would understate sliding-window steady-state
 cost by half.
@@ -308,7 +311,10 @@ packages:
   with a limit of 3 per minute, 3 requests from `10.0.0.1` returned
   200/200/200 and 3 from `10.0.0.2` returned 429/429/429. With the
   single-identity workload used here the behaviour is identical either way,
-  but it is not a per-IP limiter as configured.
+  but it is not a per-IP limiter as configured. (The committed comparison
+  JSONs' `methodology.app_shape` in `cmp11/12` predates this disclosure and
+  says "per-IP keying" — that describes the app, not fastapi-limiter's
+  shared route bucket; the harness string was corrected for future runs.)
 - **fastapi-limiter's Redis bucket stores one sorted-set member per
   request** (pyrate-limiter's README says so), so its memory grows with
   traffic inside the window, unlike moderato's constant-size counters.
@@ -401,10 +407,11 @@ Percent difference in throughput, moderato versus the library, run 1 / run
 - **Client-bound, not Redis-bound.** In the concurrency sweep the benchmark
   process runs at 100–100% of a core while the Redis server stays at
   33–41% of a core — the direct evidence for client-boundedness. The raw
-  Redis floor is consistent with that: 9,087–13,530 ops/s for a single
-  `EVALSHA` sits far above the limiter-only path's ~1.4–1.8k req/s, and even
-  the two-call floor (4,486–7,630 ops/s) — what token-bucket and
-  sliding-window checks still pay — leaves Redis with comfortable headroom.
+  Redis floor is consistent with that: a single `EVALSHA` sustains
+  9,087–13,530 ops/s on this box — above the ~8.0–8.2k req/s the
+  concurrency sweep achieves — while the two-call floor (4,486–7,630
+  ops/s), which token-bucket and sliding-window checks still pay, sits
+  well above those algorithms' observed 3.1–3.4k req/s.
 - **The ranking depends on the path.** On the allowed path moderato is
   0.5–19% behind slowapi across levels (the gap widens at 100 clients) and
   ahead of fastapi-limiter at every level (+1% to +32%). On the limited

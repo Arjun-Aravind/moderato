@@ -179,8 +179,8 @@ async def build_slowapi_app(redis_url: str, limit_per_minute: int, key_prefix: s
     )
     app = FastAPI()
     app.state.limiter = limiter
-    # limits wraps a sync redis client; expose its close for the harness
-    # teardown (sync, so the caller must run it in a thread).
+    # slowapi 0.1.10's limits storage wraps a sync redis client; expose its
+    # close for harness teardown (sync, so the caller must run it in a thread).
     app.state.close_limiter_sync = limiter._storage.storage.close
     app.add_exception_handler(SlowAPIRateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -327,7 +327,7 @@ async def measure_app(
                     )
                 return measured, worker_statuses
 
-            minute_before: Optional[int] = None
+            level_minute: Optional[int] = None
             for _ in range(trials):
                 # Require runway sized from the previous trial's measured
                 # duration (10 s floor for a level's first trial); a trial
@@ -339,12 +339,19 @@ async def measure_app(
                     # is unsatisfiable and would wait forever. The post-trial
                     # boundary check below still fails the run loudly.
                     await wait_for_runway(min(floor_s + 1.0, 55.0))
-                    minute_before = int(await redis_seconds()) // 60
+                    trial_minute = int(await redis_seconds()) // 60
+                    if level_minute is None:
+                        level_minute = trial_minute
+                    elif trial_minute != level_minute:
+                        raise RuntimeError(
+                            "trial would start in a new minute; the level's fixed-window "
+                            "quota would reset and skew the allow counts"
+                        )
                 start = time.perf_counter()
                 trial_results = await asyncio.gather(*[worker(w) for w in range(num_clients)])
                 elapsed = time.perf_counter() - start
                 last_trial_seconds = elapsed
-                crossed = clock is not None and int(await redis_seconds()) // 60 != minute_before
+                crossed = clock is not None and int(await redis_seconds()) // 60 != level_minute
                 if crossed:
                     raise RuntimeError(
                         "trial crossed a minute boundary; a fixed-window quota "
@@ -541,7 +548,7 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
                     levels=LEVELS,
                     requests_per_trial=REQUESTS_PER_TRIAL,
                     trials=args.trials,
-                    clock=redis_client.time,
+                    clock=redis_client.time if limit == LIMITED_PER_MINUTE else None,
                 )
                 results["scenarios"][f"{scenario}/{name}"] = measured
                 # Close each app's limiter connections so they do not pile

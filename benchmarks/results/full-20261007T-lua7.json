@@ -1,0 +1,930 @@
+{
+  "schema_version": 1,
+  "benchmark": "moderato-performance",
+  "profile": "full",
+  "run_id": "20261007T-lua7",
+  "started_at_utc": "2026-10-07T14:39:26.242657+00:00",
+  "ended_at_utc": "2026-10-07T14:40:03.060460+00:00",
+  "duration_seconds": 36.82,
+  "redis_url_host": "localhost",
+  "environment": {
+    "platform": "Linux",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.60GHz",
+    "cpu_count": 2,
+    "ram_total_mib": 3931,
+    "kernel": "6.1.158+",
+    "python_version": "3.12.14",
+    "python_implementation": "CPython",
+    "redis_version": "7.0.15",
+    "redis_mode": "standalone",
+    "redis_url_host": "localhost",
+    "redis_placement": "localhost (same machine)",
+    "moderato_version": "0.3.0"
+  },
+  "configuration": {
+    "throughput_trials": 5,
+    "throughput_requests": 3000,
+    "latency_trials": 3,
+    "latency_samples": 2000,
+    "sweep_trials": 3,
+    "sweep_client_counts": [
+      1,
+      2,
+      5,
+      10,
+      25,
+      50,
+      100,
+      200
+    ],
+    "sweep_requests_per_client": 100,
+    "algorithm_trials": 3,
+    "algorithm_samples": 1000,
+    "accuracy_limit": 50,
+    "accuracy_multiplier": 4,
+    "memory_identities": 4000,
+    "tenant_trials": 3,
+    "tenant_count": 100,
+    "tenant_requests_per_tenant": 100,
+    "connection_pool_size": 250,
+    "connection_pool_note": "raised from the default 50 via RateLimitConfig.max_connections so high-concurrency levels measure the limiter; the default-pool boundary is measured in results.pool_capacity"
+  },
+  "results": {
+    "throughput": {
+      "requests_per_trial": 3000,
+      "sequential_req_s": {
+        "trials": 5,
+        "values": [
+          5648.2465,
+          5809.4441,
+          5764.4253,
+          5912.6368,
+          5996.8804
+        ],
+        "mean": 5826.3266,
+        "stdev": 134.5059,
+        "cv_pct": 2.31,
+        "min": 5648.2465,
+        "median": 5809.4441,
+        "max": 5996.8804
+      },
+      "concurrent_req_s": {
+        "trials": 5,
+        "values": [
+          8283.5435,
+          7714.8024,
+          8511.7217,
+          9150.1446,
+          8318.6266
+        ],
+        "mean": 8395.7678,
+        "stdev": 515.943,
+        "cv_pct": 6.15,
+        "min": 7714.8024,
+        "median": 8318.6266,
+        "max": 9150.1446
+      },
+      "speedup": {
+        "trials": 5,
+        "values": [
+          1.4666,
+          1.328,
+          1.4766,
+          1.5476,
+          1.3872
+        ],
+        "mean": 1.4412,
+        "stdev": 0.0851,
+        "cv_pct": 5.9,
+        "min": 1.328,
+        "median": 1.4666,
+        "max": 1.5476
+      }
+    },
+    "latency": {
+      "samples": 6000,
+      "pooled_ms": {
+        "min": 0.1118,
+        "p50": 0.1668,
+        "p90": 0.1899,
+        "p95": 0.1977,
+        "p99": 0.2273,
+        "p99.9": 0.3196,
+        "max": 1.3579,
+        "mean": 0.1648
+      },
+      "p50_ms": {
+        "trials": 3,
+        "values": [
+          0.1695,
+          0.1684,
+          0.1509
+        ],
+        "mean": 0.163,
+        "stdev": 0.0104,
+        "cv_pct": 6.39,
+        "min": 0.1509,
+        "median": 0.1684,
+        "max": 0.1695
+      },
+      "p99_ms": {
+        "trials": 3,
+        "values": [
+          0.223,
+          0.2307,
+          0.2164
+        ],
+        "mean": 0.2233,
+        "stdev": 0.0071,
+        "cv_pct": 3.2,
+        "min": 0.2164,
+        "median": 0.223,
+        "max": 0.2307
+      }
+    },
+    "algorithms": {
+      "fixed_window": {
+        "samples": 3000,
+        "pooled_ms": {
+          "min": 0.1142,
+          "p50": 0.1701,
+          "p90": 0.2016,
+          "p95": 0.2211,
+          "p99": 0.2681,
+          "p99.9": 0.3611,
+          "max": 2.1266,
+          "mean": 0.1749
+        },
+        "p50_ms": {
+          "trials": 3,
+          "values": [
+            0.1731,
+            0.1697,
+            0.1685
+          ],
+          "mean": 0.1704,
+          "stdev": 0.0024,
+          "cv_pct": 1.42,
+          "min": 0.1685,
+          "median": 0.1697,
+          "max": 0.1731
+        },
+        "p99_ms": {
+          "trials": 3,
+          "values": [
+            0.2988,
+            0.2468,
+            0.2595
+          ],
+          "mean": 0.2683,
+          "stdev": 0.0271,
+          "cv_pct": 10.1,
+          "min": 0.2468,
+          "median": 0.2595,
+          "max": 0.2988
+        },
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            5451.383,
+            5833.9512,
+            5889.2844
+          ],
+          "mean": 5724.8728,
+          "stdev": 238.4596,
+          "cv_pct": 4.17,
+          "min": 5451.383,
+          "median": 5833.9512,
+          "max": 5889.2844
+        }
+      },
+      "token_bucket": {
+        "samples": 3000,
+        "pooled_ms": {
+          "min": 0.1251,
+          "p50": 0.1702,
+          "p90": 0.1968,
+          "p95": 0.2092,
+          "p99": 0.2647,
+          "p99.9": 0.4271,
+          "max": 0.9563,
+          "mean": 0.1745
+        },
+        "p50_ms": {
+          "trials": 3,
+          "values": [
+            0.1757,
+            0.1685,
+            0.1686
+          ],
+          "mean": 0.1709,
+          "stdev": 0.0041,
+          "cv_pct": 2.39,
+          "min": 0.1685,
+          "median": 0.1686,
+          "max": 0.1757
+        },
+        "p99_ms": {
+          "trials": 3,
+          "values": [
+            0.2406,
+            0.2893,
+            0.2452
+          ],
+          "mean": 0.2584,
+          "stdev": 0.0269,
+          "cv_pct": 10.4,
+          "min": 0.2406,
+          "median": 0.2452,
+          "max": 0.2893
+        },
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            5601.3746,
+            5802.7855,
+            5789.6703
+          ],
+          "mean": 5731.2768,
+          "stdev": 112.6895,
+          "cv_pct": 1.97,
+          "min": 5601.3746,
+          "median": 5789.6703,
+          "max": 5802.7855
+        }
+      },
+      "sliding_window": {
+        "samples": 3000,
+        "pooled_ms": {
+          "min": 0.1211,
+          "p50": 0.17,
+          "p90": 0.1956,
+          "p95": 0.2055,
+          "p99": 0.2303,
+          "p99.9": 0.2895,
+          "max": 0.3355,
+          "mean": 0.1731
+        },
+        "p50_ms": {
+          "trials": 3,
+          "values": [
+            0.1715,
+            0.1735,
+            0.1668
+          ],
+          "mean": 0.1706,
+          "stdev": 0.0034,
+          "cv_pct": 2.01,
+          "min": 0.1668,
+          "median": 0.1715,
+          "max": 0.1735
+        },
+        "p99_ms": {
+          "trials": 3,
+          "values": [
+            0.2367,
+            0.2193,
+            0.2234
+          ],
+          "mean": 0.2265,
+          "stdev": 0.0091,
+          "cv_pct": 4.01,
+          "min": 0.2193,
+          "median": 0.2234,
+          "max": 0.2367
+        },
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            5705.7218,
+            5744.5294,
+            5883.972
+          ],
+          "mean": 5778.0744,
+          "stdev": 93.7403,
+          "cv_pct": 1.62,
+          "min": 5705.7218,
+          "median": 5744.5294,
+          "max": 5883.972
+        }
+      }
+    },
+    "accuracy_under_load": {
+      "fixed_window": {
+        "allowed": 50,
+        "denied": 150,
+        "expected_point": 50,
+        "expected_low": 50,
+        "expected_high": 50,
+        "burst_span_seconds": 0.0236,
+        "windows_touched": 1,
+        "pass": true
+      },
+      "token_bucket": {
+        "allowed": 51,
+        "denied": 149,
+        "expected_point": 51.71,
+        "expected_low": 50,
+        "expected_high": 53,
+        "burst_span_seconds": 0.0341,
+        "windows_touched": 1,
+        "pass": true
+      },
+      "sliding_window": {
+        "allowed": 50,
+        "denied": 150,
+        "expected_point": 50,
+        "expected_low": 50,
+        "expected_high": 50,
+        "burst_span_seconds": 0.0247,
+        "windows_touched": 1,
+        "pass": true
+      }
+    },
+    "memory": {
+      "fixed_window": {
+        "identities": 4000,
+        "keys": 4000,
+        "keys_per_identity": 1.0,
+        "bytes_per_key": {
+          "samples": 4000,
+          "mean": 152.0,
+          "stdev": 0.0,
+          "cv_pct": 0.0,
+          "min": 152.0,
+          "median": 152.0,
+          "max": 152.0
+        },
+        "bytes_per_identity": 152.0,
+        "measured_via": "MEMORY USAGE",
+        "steady": {
+          "identities": 200,
+          "keys": 200,
+          "keys_per_identity": 1.0,
+          "bytes_per_key": {
+            "samples": 200,
+            "mean": 152.0,
+            "stdev": 0.0,
+            "cv_pct": 0.0,
+            "min": 152.0,
+            "median": 152.0,
+            "max": 152.0
+          },
+          "bytes_per_identity": 152.0,
+          "measured_via": "MEMORY USAGE after two checks one window apart"
+        }
+      },
+      "token_bucket": {
+        "identities": 4000,
+        "keys": 4000,
+        "keys_per_identity": 1.0,
+        "bytes_per_key": {
+          "samples": 4000,
+          "mean": 196.0,
+          "stdev": 6.9291,
+          "cv_pct": 3.54,
+          "min": 184.0,
+          "median": 200.0,
+          "max": 200.0
+        },
+        "bytes_per_identity": 196.0,
+        "measured_via": "MEMORY USAGE",
+        "steady": {
+          "identities": 200,
+          "keys": 200,
+          "keys_per_identity": 1.0,
+          "bytes_per_key": {
+            "samples": 200,
+            "mean": 184.0,
+            "stdev": 0.0,
+            "cv_pct": 0.0,
+            "min": 184.0,
+            "median": 184.0,
+            "max": 184.0
+          },
+          "bytes_per_identity": 184.0,
+          "measured_via": "MEMORY USAGE after two checks one window apart"
+        }
+      },
+      "sliding_window": {
+        "identities": 4000,
+        "keys": 4000,
+        "keys_per_identity": 1.0,
+        "bytes_per_key": {
+          "samples": 4000,
+          "mean": 152.0,
+          "stdev": 0.0,
+          "cv_pct": 0.0,
+          "min": 152.0,
+          "median": 152.0,
+          "max": 152.0
+        },
+        "bytes_per_identity": 152.0,
+        "measured_via": "MEMORY USAGE",
+        "steady": {
+          "identities": 200,
+          "keys": 400,
+          "keys_per_identity": 2.0,
+          "bytes_per_key": {
+            "samples": 400,
+            "mean": 152.0,
+            "stdev": 0.0,
+            "cv_pct": 0.0,
+            "min": 152.0,
+            "median": 152.0,
+            "max": 152.0
+          },
+          "bytes_per_identity": 304.0,
+          "measured_via": "MEMORY USAGE after two checks one window apart"
+        }
+      }
+    },
+    "pool_capacity": {
+      "default_max_connections": 50,
+      "checks_per_level": 1000,
+      "levels": [
+        {
+          "clients": 25,
+          "outcomes": {
+            "ok": 1000
+          },
+          "peak_in_use_connections": 4
+        },
+        {
+          "clients": 50,
+          "outcomes": {
+            "ok": 1000
+          },
+          "peak_in_use_connections": 5
+        },
+        {
+          "clients": 75,
+          "outcomes": {
+            "ok": 1000
+          },
+          "peak_in_use_connections": 10
+        },
+        {
+          "clients": 100,
+          "outcomes": {
+            "ok": 1000
+          },
+          "peak_in_use_connections": 14
+        },
+        {
+          "clients": 200,
+          "outcomes": {
+            "ok": 1000
+          },
+          "peak_in_use_connections": 15
+        }
+      ]
+    },
+    "concurrency_sweep": [
+      {
+        "clients": 1,
+        "requests_per_trial": 100,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            6778.7511,
+            5981.5302,
+            5781.7899
+          ],
+          "mean": 6180.6904,
+          "stdev": 527.4765,
+          "cv_pct": 8.53,
+          "min": 5781.7899,
+          "median": 5981.5302,
+          "max": 6778.7511
+        },
+        "latency": {
+          "samples": 300,
+          "pooled_ms": {
+            "min": 0.1176,
+            "p50": 0.1531,
+            "p90": 0.1928,
+            "p95": 0.2071,
+            "p99": 0.2385,
+            "p99.9": 0.3822,
+            "max": 0.3822,
+            "mean": 0.1619
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 0.1611,
+            "stdev": 0.0175,
+            "cv_pct": 10.86,
+            "min": 0.1409,
+            "median": 0.1709,
+            "max": 0.1714
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 0.2608,
+            "stdev": 0.0699,
+            "cv_pct": 26.8,
+            "min": 0.214,
+            "median": 0.2273,
+            "max": 0.3411
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 84.3,
+          "redis_server": 28.5
+        }
+      },
+      {
+        "clients": 2,
+        "requests_per_trial": 200,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            8693.7059,
+            8583.4917,
+            8800.8789
+          ],
+          "mean": 8692.6922,
+          "stdev": 108.6972,
+          "cv_pct": 1.25,
+          "min": 8583.4917,
+          "median": 8693.7059,
+          "max": 8800.8789
+        },
+        "latency": {
+          "samples": 600,
+          "pooled_ms": {
+            "min": 0.1357,
+            "p50": 0.2201,
+            "p90": 0.2524,
+            "p95": 0.262,
+            "p99": 0.3041,
+            "p99.9": 0.489,
+            "max": 0.489,
+            "mean": 0.2288
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 0.2202,
+            "stdev": 0.0007,
+            "cv_pct": 0.31,
+            "min": 0.2195,
+            "median": 0.2203,
+            "max": 0.2209
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 0.3045,
+            "stdev": 0.0554,
+            "cv_pct": 18.2,
+            "min": 0.2691,
+            "median": 0.276,
+            "max": 0.3684
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 99.9,
+          "redis_server": 35.6
+        }
+      },
+      {
+        "clients": 5,
+        "requests_per_trial": 500,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            9247.5423,
+            8751.6567,
+            7263.8838
+          ],
+          "mean": 8421.0276,
+          "stdev": 1032.3332,
+          "cv_pct": 12.26,
+          "min": 7263.8838,
+          "median": 8751.6567,
+          "max": 9247.5423
+        },
+        "latency": {
+          "samples": 1500,
+          "pooled_ms": {
+            "min": 0.1391,
+            "p50": 0.5456,
+            "p90": 0.7993,
+            "p95": 0.8498,
+            "p99": 1.0207,
+            "p99.9": 1.4109,
+            "max": 1.6468,
+            "mean": 0.5964
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 0.5945,
+            "stdev": 0.0995,
+            "cv_pct": 16.74,
+            "min": 0.5339,
+            "median": 0.5401,
+            "max": 0.7093
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 0.9395,
+            "stdev": 0.2549,
+            "cv_pct": 27.13,
+            "min": 0.6453,
+            "median": 1.0803,
+            "max": 1.0927
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 99.6,
+          "redis_server": 37.9
+        }
+      },
+      {
+        "clients": 10,
+        "requests_per_trial": 1000,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            9298.0755,
+            9224.8592,
+            9277.1607
+          ],
+          "mean": 9266.6985,
+          "stdev": 37.7127,
+          "cv_pct": 0.41,
+          "min": 9224.8592,
+          "median": 9277.1607,
+          "max": 9298.0755
+        },
+        "latency": {
+          "samples": 3000,
+          "pooled_ms": {
+            "min": 0.293,
+            "p50": 1.0555,
+            "p90": 1.1353,
+            "p95": 1.2076,
+            "p99": 1.558,
+            "p99.9": 1.7442,
+            "max": 1.7787,
+            "mean": 1.0733
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 1.0563,
+            "stdev": 0.0052,
+            "cv_pct": 0.5,
+            "min": 1.0525,
+            "median": 1.0541,
+            "max": 1.0623
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 1.4644,
+            "stdev": 0.2013,
+            "cv_pct": 13.75,
+            "min": 1.2331,
+            "median": 1.5598,
+            "max": 1.6001
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 100.0,
+          "redis_server": 40.8
+        }
+      },
+      {
+        "clients": 25,
+        "requests_per_trial": 2500,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            8431.8023,
+            9256.9077,
+            9237.3368
+          ],
+          "mean": 8975.3489,
+          "stdev": 470.8269,
+          "cv_pct": 5.25,
+          "min": 8431.8023,
+          "median": 9237.3368,
+          "max": 9256.9077
+        },
+        "latency": {
+          "samples": 7500,
+          "pooled_ms": {
+            "min": 0.2262,
+            "p50": 2.6776,
+            "p90": 2.9906,
+            "p95": 3.1525,
+            "p99": 4.4456,
+            "p99.9": 6.5081,
+            "max": 7.1921,
+            "mean": 2.768
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 2.7244,
+            "stdev": 0.1472,
+            "cv_pct": 5.4,
+            "min": 2.6349,
+            "median": 2.644,
+            "max": 2.8942
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 4.1757,
+            "stdev": 1.0845,
+            "cv_pct": 25.97,
+            "min": 3.1939,
+            "median": 3.9935,
+            "max": 5.3398
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 99.2,
+          "redis_server": 38.2
+        }
+      },
+      {
+        "clients": 50,
+        "requests_per_trial": 5000,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            8449.2169,
+            8643.7042,
+            8439.136
+          ],
+          "mean": 8510.6857,
+          "stdev": 115.3076,
+          "cv_pct": 1.35,
+          "min": 8439.136,
+          "median": 8449.2169,
+          "max": 8643.7042
+        },
+        "latency": {
+          "samples": 15000,
+          "pooled_ms": {
+            "min": 1.7357,
+            "p50": 5.8742,
+            "p90": 6.131,
+            "p95": 6.2845,
+            "p99": 7.3908,
+            "p99.9": 9.4588,
+            "max": 10.6614,
+            "mean": 5.8275
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 5.8829,
+            "stdev": 0.0598,
+            "cv_pct": 1.02,
+            "min": 5.8183,
+            "median": 5.8938,
+            "max": 5.9365
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 7.4855,
+            "stdev": 0.7404,
+            "cv_pct": 9.89,
+            "min": 6.6778,
+            "median": 7.6466,
+            "max": 8.1321
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 99.8,
+          "redis_server": 33.7
+        }
+      },
+      {
+        "clients": 100,
+        "requests_per_trial": 10000,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            8277.9303,
+            8299.1769,
+            8396.4342
+          ],
+          "mean": 8324.5138,
+          "stdev": 63.1843,
+          "cv_pct": 0.76,
+          "min": 8277.9303,
+          "median": 8299.1769,
+          "max": 8396.4342
+        },
+        "latency": {
+          "samples": 30000,
+          "pooled_ms": {
+            "min": 0.3481,
+            "p50": 11.8067,
+            "p90": 12.8987,
+            "p95": 14.0208,
+            "p99": 15.974,
+            "p99.9": 26.4281,
+            "max": 29.6097,
+            "mean": 11.9312
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 11.8012,
+            "stdev": 0.0781,
+            "cv_pct": 0.66,
+            "min": 11.7469,
+            "median": 11.7662,
+            "max": 11.8907
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 17.0562,
+            "stdev": 3.1954,
+            "cv_pct": 18.73,
+            "min": 14.8424,
+            "median": 15.6069,
+            "max": 20.7194
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 99.7,
+          "redis_server": 32.5
+        }
+      },
+      {
+        "clients": 200,
+        "requests_per_trial": 20000,
+        "throughput_req_s": {
+          "trials": 3,
+          "values": [
+            7876.804,
+            7909.6957,
+            7790.5975
+          ],
+          "mean": 7859.0324,
+          "stdev": 61.5058,
+          "cv_pct": 0.78,
+          "min": 7790.5975,
+          "median": 7876.804,
+          "max": 7909.6957
+        },
+        "latency": {
+          "samples": 60000,
+          "pooled_ms": {
+            "min": 4.6534,
+            "p50": 24.5026,
+            "p90": 27.9464,
+            "p95": 33.2823,
+            "p99": 40.5814,
+            "p99.9": 42.8231,
+            "max": 43.3346,
+            "mean": 25.2838
+          },
+          "p50_ms": {
+            "trials": 3,
+            "mean": 24.4612,
+            "stdev": 0.853,
+            "cv_pct": 3.49,
+            "min": 23.7297,
+            "median": 24.2556,
+            "max": 25.3981
+          },
+          "p99_ms": {
+            "trials": 3,
+            "mean": 39.0464,
+            "stdev": 3.5523,
+            "cv_pct": 9.1,
+            "min": 35.1882,
+            "median": 39.7695,
+            "max": 42.1815
+          }
+        },
+        "cpu_pct_of_one_core": {
+          "benchmark_client": 99.1,
+          "redis_server": 32.5
+        }
+      }
+    ],
+    "multi_tenant": {
+      "tenants": 100,
+      "requests_per_trial": 10000,
+      "throughput_req_s": {
+        "trials": 3,
+        "values": [
+          7873.047,
+          8237.3605,
+          7895.4784
+        ],
+        "mean": 8001.962,
+        "stdev": 204.1694,
+        "cv_pct": 2.55,
+        "min": 7873.047,
+        "median": 7895.4784,
+        "max": 8237.3605
+      }
+    }
+  },
+  "slim": true,
+  "slim_note": "per-sample arrays omitted (memory bytes-per-key samples, including steady state, and sweep per-client percentile samples); rerun without --slim for the full samples"
+}

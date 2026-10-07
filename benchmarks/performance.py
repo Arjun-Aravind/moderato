@@ -215,6 +215,22 @@ class PerformanceBenchmark:
         component = ":".join(["bench", self.run_id, *[str(p) for p in parts]]) + ":"
         return f"{prefix}:{normalize_key_component(component)}*"
 
+    async def _start_of_next_second(self, margin: float = 0.002) -> None:
+        """Sleep until just after the next whole second on the Redis clock.
+
+        Window boundaries are decided by Redis TIME, so alignment uses the
+        same clock rather than the local one; a remote Redis may be skewed.
+        """
+        assert self.probe is not None
+        seconds, micros = await self.probe.time()
+        await asyncio.sleep(1.0 - micros / 1_000_000.0 + margin)
+
+    async def _redis_cpu_seconds(self) -> float:
+        """Cumulative CPU seconds consumed by the Redis server process."""
+        assert self.probe is not None
+        info = await self.probe.info("cpu")
+        return float(info["used_cpu_sys"]) + float(info["used_cpu_user"])
+
     async def _delete_bench_keys(self) -> int:
         assert self.probe is not None
         deleted = 0
@@ -368,6 +384,9 @@ class PerformanceBenchmark:
                     latencies.append((time.perf_counter() - start) * 1000.0)
                 return latencies
 
+            redis_cpu_before = await self._redis_cpu_seconds()
+            client_cpu_before = time.process_time()
+            wall_before = time.perf_counter()
             for trial in range(trials):
                 start = time.perf_counter()
                 latencies = await asyncio.gather(
@@ -376,6 +395,9 @@ class PerformanceBenchmark:
                 elapsed = time.perf_counter() - start
                 rates.append((num_clients * per_client) / elapsed)
                 trials_latencies.extend(latencies)
+            wall = time.perf_counter() - wall_before
+            client_cpu = 100.0 * (time.process_time() - client_cpu_before) / wall
+            redis_cpu = 100.0 * (await self._redis_cpu_seconds() - redis_cpu_before) / wall
 
             summary = latency_summary(trials_latencies)
             row = {
@@ -383,13 +405,18 @@ class PerformanceBenchmark:
                 "requests_per_trial": num_clients * per_client,
                 "throughput_req_s": summarize(rates),
                 "latency": summary,
+                "cpu_pct_of_one_core": {
+                    "benchmark_client": round(client_cpu, 1),
+                    "redis_server": round(redis_cpu, 1),
+                },
             }
             rows.append(row)
             th = row["throughput_req_s"]
             print(
                 f"  {num_clients:4} clients: {th['mean']:9,.1f} ± {th['stdev']:9,.1f} req/s | "
                 f"p50 {summary['pooled_ms']['p50']:6.3f}ms | "
-                f"p99 {summary['pooled_ms']['p99']:6.3f}ms"
+                f"p99 {summary['pooled_ms']['p99']:6.3f}ms | "
+                f"cpu client {client_cpu:5.1f}% redis {redis_cpu:5.1f}%"
             )
 
         self.results["concurrency_sweep"] = rows
@@ -462,6 +489,7 @@ class PerformanceBenchmark:
                 except RateLimitExceeded:
                     return False
 
+            await self._start_of_next_second()
             start_s, start_us = await self.probe.time()
             allowed = sum(await asyncio.gather(*[attempt() for _ in range(total)]))
             end_s, end_us = await self.probe.time()
@@ -503,36 +531,60 @@ class PerformanceBenchmark:
         self.results["accuracy_under_load"] = algorithm_results
         print()
 
+    async def _memory_usage(self, pattern: str) -> tuple[list[int], list[str]]:
+        """Scan this run's keys matching ``pattern`` and read MEMORY USAGE for each."""
+        assert self.probe is not None
+        keys = [key async for key in self.probe.scan_iter(match=pattern, count=500)]
+        usages: list[int] = []
+        for chunk_start in range(0, len(keys), 1000):
+            chunk = keys[chunk_start : chunk_start + 1000]
+            pipe = self.probe.pipeline()
+            for key in chunk:
+                pipe.memory_usage(key)
+            usages.extend(value for value in await pipe.execute() if value is not None)
+        return usages, keys
+
     async def benchmark_memory_usage(self) -> None:
-        """Real per-key memory from Redis MEMORY USAGE, per algorithm."""
+        """Real per-key memory from Redis MEMORY USAGE, per algorithm.
+
+        Two measurements per algorithm. The first checks many identities
+        once each and scans every key the run created. The second checks a
+        smaller set twice, one window apart, and measures every key still
+        alive: at steady state the sliding window keeps the previous
+        window's key alongside the current one (its TTL is 2x the window),
+        so it costs two keys per live identity while the other algorithms
+        cost one.
+        """
         identities = self.config["memory_identities"]
         rate = "100/minute"
         print(f"Memory usage (MEMORY USAGE over {identities} identities per algorithm)")
         print("-" * 60)
         assert self.limiter is not None
-        assert self.probe is not None
 
         algorithms = ["fixed_window", "token_bucket", "sliding_window"]
         results = {}
         for algorithm in algorithms:
+            # Fixed-window keys expire at the minute boundary, so a batch
+            # created across one would lose its older keys before the scan.
+            # Start only when the whole batch fits before the next
+            # boundary; the wait is skipped whenever there is enough
+            # runway.
+            now = time.time()
+            runway = math.ceil(now / 60) * 60 - now
+            if runway < 10.0:
+                await asyncio.sleep(runway + 0.05)
+
             for i in range(identities):
                 await self.limiter.check(
                     key=self.bench_key("memory", algorithm, i), rate=rate, algorithm=algorithm
                 )
 
-            # Sliding window keeps one key per window boundary per identity,
-            # so measure every key the run created and report both per-key
-            # and per-identity bytes.
-            pattern = self.redis_key_pattern("memory", algorithm)
-            keys = [key async for key in self.probe.scan_iter(match=pattern, count=500)]
-            usages: list[int] = []
-            for chunk_start in range(0, len(keys), 1000):
-                chunk = keys[chunk_start : chunk_start + 1000]
-                pipe = self.probe.pipeline()
-                for key in chunk:
-                    pipe.memory_usage(key)
-                usages.extend(value for value in await pipe.execute() if value is not None)
-
+            usages, keys = await self._memory_usage(self.redis_key_pattern("memory", algorithm))
+            if len(usages) != identities:
+                raise RuntimeError(
+                    f"{algorithm}: measured {len(usages)} of {identities} keys; "
+                    "a window boundary expired keys before the scan"
+                )
             total_bytes = sum(usages)
             results[algorithm] = {
                 "identities": identities,
@@ -547,6 +599,43 @@ class PerformanceBenchmark:
                 f"  {algorithm:15} | {len(keys):5} keys | per key {bpk['mean']:6.1f} ± "
                 f"{bpk['stdev']:5.1f} bytes (median {bpk['median']:6.1f}) | "
                 f"per identity {results[algorithm]['bytes_per_identity']:6.1f} bytes"
+            )
+
+        # Steady state: two checks one window apart, then measure everything
+        # still alive. Both batches start just after a 1-second boundary so
+        # the key sets are deterministic: the fixed window's first keys
+        # expire exactly at that boundary, the sliding window's first keys
+        # (TTL 2x window) stay alive alongside the second batch's, and the
+        # token bucket keeps its single key.
+        steady_identities = 200
+        steady_rate = "100/second"
+        print(f"Steady state ({steady_identities} identities, two checks one window apart)")
+
+        for algorithm in algorithms:
+            steady_keys = [self.bench_key("steady", algorithm, i) for i in range(steady_identities)]
+            await self._start_of_next_second()
+            for key in steady_keys:
+                await self.limiter.check(key=key, rate=steady_rate, algorithm=algorithm)
+            await self._start_of_next_second()
+            for key in steady_keys:
+                await self.limiter.check(key=key, rate=steady_rate, algorithm=algorithm)
+
+            usages, keys = await self._memory_usage(self.redis_key_pattern("steady", algorithm))
+            total_bytes = sum(usages)
+            steady = {
+                "identities": steady_identities,
+                "keys": len(keys),
+                "keys_per_identity": round(len(keys) / steady_identities, 3),
+                "bytes_per_key": summarize(usages),
+                "bytes_per_identity": round(total_bytes / steady_identities, 1),
+                "measured_via": "MEMORY USAGE after two checks one window apart",
+            }
+            results[algorithm]["steady"] = steady
+            bpk = steady["bytes_per_key"]
+            print(
+                f"  {algorithm:15} | {len(keys):5} keys | per key {bpk['mean']:6.1f} ± "
+                f"{bpk['stdev']:5.1f} bytes | per identity "
+                f"{steady['bytes_per_identity']:6.1f} bytes"
             )
 
         self.results["memory"] = results
@@ -753,7 +842,33 @@ def _moderato_version() -> str:
     return __version__
 
 
-async def main(quick: bool, trials: Optional[int], run_id: str, json_path: Path) -> None:
+def slim_payload(payload: dict[str, Any]) -> None:
+    """Reduce an evidence JSON to summary-level fields, in place.
+
+    The committed evidence only needs the summaries; the per-sample arrays
+    (4,000 per-key memory samples per algorithm plus the per-client sweep
+    percentiles) are what make each run ~15k lines instead of ~900. Rerun
+    without --slim to keep them for local analysis.
+    """
+    for stats in payload["results"]["memory"].values():
+        stats["bytes_per_key"].pop("values", None)
+        steady = stats.get("steady")
+        if steady:
+            steady["bytes_per_key"].pop("values", None)
+    for level in payload["results"]["concurrency_sweep"]:
+        for key in ("p50_ms", "p99_ms"):
+            level["latency"][key].pop("values", None)
+    payload["slim"] = True
+    payload["slim_note"] = (
+        "per-sample arrays omitted (memory bytes-per-key samples, including "
+        "steady state, and sweep per-client percentile samples); rerun without "
+        "--slim for the full samples"
+    )
+
+
+async def main(
+    quick: bool, trials: Optional[int], run_id: str, json_path: Path, slim: bool = False
+) -> None:
     redis_url = os.getenv("REDIS_URL", REDIS_URL_DEFAULT)
     profile = "quick" if quick else "full"
     config = dict(QUICK_PROFILE if quick else FULL_PROFILE)
@@ -772,9 +887,20 @@ async def main(quick: bool, trials: Optional[int], run_id: str, json_path: Path)
         raise
 
     payload = benchmark.to_json(started_at)
+    if slim:
+        slim_payload(payload)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"Machine-readable results: {json_path}")
+
+    failures = sorted(
+        algorithm
+        for algorithm, outcome in payload["results"]["accuracy_under_load"].items()
+        if not outcome["pass"]
+    )
+    if failures:
+        print(f"Accuracy check failed for: {', '.join(failures)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
@@ -790,6 +916,11 @@ if __name__ == "__main__":
         default=None,
         help="JSON output path (default: benchmarks/results/<profile>-<run-id>.json)",
     )
+    parser.add_argument(
+        "--slim",
+        action="store_true",
+        help="Write summary-level JSON without per-sample arrays (for committing evidence)",
+    )
     args = parser.parse_args()
 
     resolved_run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -801,5 +932,11 @@ if __name__ == "__main__":
         f"{'quick' if args.quick else 'full'}-{resolved_run_id}.json"
     )
     asyncio.run(
-        main(quick=args.quick, trials=args.trials, run_id=resolved_run_id, json_path=output)
+        main(
+            quick=args.quick,
+            trials=args.trials,
+            run_id=resolved_run_id,
+            json_path=output,
+            slim=args.slim,
+        )
     )

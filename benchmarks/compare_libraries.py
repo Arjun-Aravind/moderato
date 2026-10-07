@@ -38,6 +38,7 @@ import json
 import math
 import os
 import platform
+import re
 import shutil
 import statistics
 import subprocess
@@ -243,12 +244,14 @@ APP_BUILDERS: dict[str, AppBuilder] = {
 async def delete_owned_keys(redis_client: Any, key_prefix: str) -> int:
     """Delete every key this run owns, identified by its unique prefix.
 
-    Never touches anything else on the (possibly shared) database.
+    Never touches anything else on the (possibly shared) database. The
+    prefix ends in ``~``, which run ids cannot contain, so a run id that is
+    a prefix of another (``c1`` and ``c1-b``) can never match the other's
+    keys.
     """
-    pattern = f"*{key_prefix}*"
     deleted = 0
     batch: list[str] = []
-    async for key in redis_client.scan_iter(match=pattern, count=500):
+    async for key in redis_client.scan_iter(match=f"*{key_prefix}*", count=500):
         batch.append(key)
         if len(batch) >= 500:
             deleted += await redis_client.delete(*batch)
@@ -425,7 +428,7 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     from moderato import __version__
 
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    key_prefix = f"bench-compare-{args.run_id}"
+    key_prefix = f"bench-compare-{args.run_id}~"
     started_at = datetime.now(timezone.utc)
     redis_client = redis.from_url(redis_url, decode_responses=True)
     await redis_client.ping()
@@ -463,8 +466,11 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
                 "so each level starts from a fresh quota and the database is never flushed"
             ),
             "limited_scenario_note": (
-                "the first 20 warm-up requests consume part of the quota, so timed "
-                "allowances at 1 client are limit minus warm-up"
+                "each level starts from a fresh quota (owned keys are deleted "
+                "before every level), so exactly the first 100 timed requests at "
+                "every level are allowed and the remaining 2,900 are rejected "
+                "with 429; the 20-request warm-up runs once before the first "
+                "level and its quota consumption is wiped by that level's reset"
             ),
             "note": "compares libraries as-shipped per their documented usage",
         },
@@ -540,14 +546,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=TRIALS)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--json", type=Path, default=None)
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.run_id is None:
+        args.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # The run id becomes part of Redis key prefixes and of the SCAN cleanup
+    # patterns; reject anything that could widen cleanup beyond this run.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", args.run_id):
+        parser.error("--run-id must match [A-Za-z0-9._-]{1,64}")
+    return args
 
 
 if __name__ == "__main__":
     parsed = parse_args()
-    if parsed.run_id is None:
-        parsed.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
     target_python = ensure_venv(parsed.venv)
     # Compare paths WITHOUT resolving symlinks: both venv pythons may symlink
     # to the same base interpreter, which would wrongly skip the re-exec.

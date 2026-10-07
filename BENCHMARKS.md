@@ -224,7 +224,7 @@ the counter immediately and the request was admitted without being counted
 (reproduced directly against the script: 5 of 5 requests allowed with a
 limit of 50, and the key never persisted). That race is fixed as of the
 current code: every algorithm's Lua script reads `TIME` and derives its
-window state atomically, so no client-side window can expire
+rate-limit state atomically, so no client-side time can go stale
 mid-decision. The aligned burst is retained because it keeps the accuracy
 check deterministic; the boundary race no longer exists to expose.
 
@@ -377,8 +377,8 @@ Raw Redis operations per request, no HTTP stack, same client machine:
 | --- | --- | --- | --- | --- | --- |
 | 1× EVALSHA | 1 | 9,773 | 12,651 | 13,216 | 12,921 |
 | 1× EVALSHA | 2 | 9,087 | 13,586 | 13,113 | 12,976 |
-| 2× EVALSHA (TIME + script) | 1 | 4,237 | 7,686 | 6,582 | 6,607 |
-| 2× EVALSHA (TIME + script) | 2 | 4,666 | 7,717 | 6,630 | 6,535 |
+| TIME + EVALSHA (the old two-call pattern) | 1 | 4,237 | 7,686 | 6,582 | 6,607 |
+| TIME + EVALSHA (the old two-call pattern) | 2 | 4,666 | 7,717 | 6,630 | 6,535 |
 
 (The 1-client numbers are the noisiest; from 10 clients on, each row is
 stable within a few percent.)
@@ -418,8 +418,9 @@ Percent difference in throughput, moderato versus the library, run 1 / run
   (+0% to +21%). There is no single "moderato is X% faster" number: the
   margins are path- and level-dependent.
 - **One round trip per decision for every algorithm.** Each of moderato's
-  Lua scripts reads server `TIME` and derives its window state atomically,
-  so every check is a single `EVALSHA` — the same round-trip count as
+  Lua scripts reads server `TIME` and derives its rate-limit state
+  atomically, so every check is one script call (normally a single
+  `EVALSHA`, with an `EVAL` fallback) — the same round-trip count as
   slowapi and fastapi-limiter (confirmed with the command counts above).
   Windows stay consistent across application instances without trusting
   client clocks. At 1 client moderato's allowed-path p50 is 0.56–0.59 ms

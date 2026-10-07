@@ -59,7 +59,7 @@ except ModuleNotFoundError as exc:
         raise
     _METRICS_AVAILABLE = False
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __author__ = "Arjun Aravind"
 __email__ = "arjunaravind748@gmail.com"
 

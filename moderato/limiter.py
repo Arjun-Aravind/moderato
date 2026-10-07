@@ -333,27 +333,27 @@ class RateLimiter:
         max_requests = requests * 1000
         cost_with_multiplier = cost * 1000
 
-        # Route to appropriate algorithm
-        # Use Redis server time for consistency in distributed deployments
-        redis_time_seconds, redis_time_us = await self.backend.get_redis_time()
+        if algorithm != "fixed_window":
+            # Token and sliding windows use Redis server time for
+            # consistency in distributed deployments.
+            redis_time_seconds, redis_time_us = await self.backend.get_redis_time()
 
         if algorithm == "fixed_window":
-            # Fixed window needs time-based key for window buckets
-            current_time = redis_time_seconds
-            time_window = get_time_window(window_seconds, current_time)
-            window_end = int(time_window) + window_seconds  # When this window expires
-            full_key = generate_key(
+            # The script derives its Redis-time window atomically. Passing
+            # a prefix (rather than a client-time window key) prevents a
+            # boundary between TIME and EVAL from creating an expired key.
+            key_prefix = generate_key(
                 self.config.key_prefix,
                 key,
                 tenant_type,
                 policy,
-                time_window,
+                "",
                 scope=scope,
             )
             result = await self._run_backend_operation(
                 "check_fixed_window",
                 self.backend.check_fixed_window(
-                    full_key, max_requests, window_seconds, window_end, cost_with_multiplier
+                    key_prefix, max_requests, window_seconds, cost=cost_with_multiplier
                 ),
             )
         elif algorithm == "token_bucket":
@@ -418,9 +418,9 @@ class RateLimiter:
         )
 
         reset_at = result.reset_at
-        if not result.allowed and reset_at is not None:
-            # A window boundary race can hand back a stale window end; the
-            # floor for a denial is now plus the enforced wait.
+        if algorithm != "fixed_window" and not result.allowed and reset_at is not None:
+            # Preserve the enforced wait when client-time algorithms return
+            # a stale boundary. Fixed-window Lua derives its own boundary.
             reset_at = max(reset_at, redis_time_seconds + retry_after_seconds)
 
         if self.metrics is not None:

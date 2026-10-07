@@ -517,9 +517,10 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
             "limited_scenario_note": (
                 "each level starts from a fresh quota (owned keys are deleted "
                 f"before every level), so exactly the first {LIMITED_PER_MINUTE} timed "
-                f"requests at every level are allowed and the remaining "
+                f"requests for each rate-limited library are allowed and the remaining "
                 f"{REQUESTS_PER_TRIAL * args.trials - LIMITED_PER_MINUTE:,} are rejected "
-                "with 429; the 20-request warm-up runs once before the first "
+                "with 429 (plain FastAPI is uncapped); the 20-request warm-up runs once "
+                "before the first "
                 "level and its quota consumption is wiped by that level's reset"
             ),
             "note": "compares libraries as-shipped per their documented usage",

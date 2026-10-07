@@ -263,8 +263,8 @@ Applications with high true concurrency and a slow Redis should raise
 
 ## Head-to-head vs slowapi and fastapi-limiter
 
-Raw data: `benchmarks/results/compare-20261007T-cmp7.json` (run 1) and
-`benchmarks/results/compare-20261007T-cmp8.json` (run 2).
+Raw data: `benchmarks/results/compare-20261007T-cmp9.json` (run 1) and
+`benchmarks/results/compare-20261007T-cmp10.json` (run 2).
 
 **What is identical for everyone:** the same minimal FastAPI app shape
 (one `GET /` returning a small JSON body, per-IP keying, client
@@ -322,15 +322,15 @@ packages:
 | Clients | plain FastAPI | moderato | slowapi | fastapi-limiter |
 | --- | --- | --- | --- | --- |
 | **Run 1** | | | | |
-| 1 | 3,853 | 1,239 | 1,750 | 1,492 |
-| 10 | 3,559 | 1,459 | 1,798 | 1,413 |
-| 50 | 3,664 | 1,386 | 1,678 | 1,311 |
-| 100 | 3,544 | 1,332 | 1,718 | 1,332 |
+| 1 | 3,600 | 1,242 | 1,666 | 1,469 |
+| 10 | 3,729 | 1,450 | 1,687 | 1,368 |
+| 50 | 3,403 | 1,303 | 1,728 | 1,326 |
+| 100 | 2,974 | 1,298 | 1,701 | 1,341 |
 | **Run 2** | | | | |
-| 1 | 3,398 | 1,227 | 1,637 | 1,433 |
-| 10 | 3,344 | 1,374 | 1,709 | 1,406 |
-| 50 | 3,394 | 1,339 | 1,645 | 1,315 |
-| 100 | 3,266 | 1,319 | 1,608 | 1,351 |
+| 1 | 3,301 | 1,307 | 1,566 | 1,488 |
+| 10 | 3,722 | 1,431 | 1,717 | 1,407 |
+| 50 | 3,671 | 1,321 | 1,705 | 1,304 |
+| 100 | 3,598 | 1,297 | 1,703 | 1,357 |
 
 (req/s, mean of 3 trials; CVs and per-trial values are in the JSON. All
 four apps show occasional 10–20% single-trial dips on this shared sandbox.)
@@ -354,15 +354,15 @@ measured quota.
 | Clients | plain FastAPI | moderato | slowapi | fastapi-limiter |
 | --- | --- | --- | --- | --- |
 | **Run 1** | | | | |
-| 1 | 3,384 | 1,228 | 1,107 | 1,562 |
-| 10 | 3,632 | 1,378 | 1,222 | 1,521 |
-| 50 | 3,598 | 1,331 | 1,139 | 1,424 |
-| 100 | 3,468 | 1,328 | 1,134 | 1,363 |
+| 1 | 3,395 | 1,250 | 1,201 | 1,482 |
+| 10 | 3,371 | 1,365 | 1,192 | 1,433 |
+| 50 | 3,150 | 1,259 | 1,088 | 1,337 |
+| 100 | 3,415 | 1,304 | 1,100 | 1,318 |
 | **Run 2** | | | | |
-| 1 | 3,540 | 1,238 | 1,177 | 1,501 |
-| 10 | 3,617 | 1,380 | 1,268 | 1,476 |
-| 50 | 3,558 | 1,285 | 1,125 | 1,350 |
-| 100 | 3,586 | 1,260 | 1,122 | 1,329 |
+| 1 | 3,324 | 1,252 | 1,156 | 1,482 |
+| 10 | 3,436 | 1,393 | 1,211 | 1,295 |
+| 50 | 3,583 | 1,274 | 1,082 | 1,268 |
+| 100 | 3,437 | 1,265 | 1,135 | 1,205 |
 
 ### Redis floor
 
@@ -370,10 +370,10 @@ Raw Redis operations per request, no HTTP stack, same client machine:
 
 | Pattern | Run | 1 client | 10 clients | 50 clients | 100 clients |
 | --- | --- | --- | --- | --- | --- |
-| 1× EVALSHA | 1 | 8,964 | 12,349 | 12,739 | 12,427 |
-| 1× EVALSHA | 2 | 9,404 | 13,874 | 11,925 | 12,566 |
-| 2× EVALSHA (TIME + script) | 1 | 4,165 | 7,198 | 6,100 | 6,105 |
-| 2× EVALSHA (TIME + script) | 2 | 3,586 | 6,507 | 5,241 | 6,097 |
+| 1× EVALSHA | 1 | 8,072 | 12,998 | 13,001 | 12,770 |
+| 1× EVALSHA | 2 | 9,857 | 12,286 | 12,317 | 12,582 |
+| 2× EVALSHA (TIME + script) | 1 | 3,830 | 6,485 | 6,019 | 6,125 |
+| 2× EVALSHA (TIME + script) | 2 | 4,259 | 6,082 | 5,927 | 6,111 |
 
 (The 1-client numbers are the noisiest; from 10 clients on, each row is
 stable within a few percent.)
@@ -385,23 +385,23 @@ Percent difference in throughput, moderato versus the library, run 1 / run
 
 | Path | Against | 1 client | 10 clients | 50 clients | 100 clients |
 | --- | --- | --- | --- | --- | --- |
-| allowed | vs slowapi | -29% / -25% | -19% / -20% | -17% / -19% | -22% / -18% |
-| allowed | vs fastapi-limiter | -17% / -14% | +3% / -2% | +6% / +2% | -0% / -2% |
-| limited | vs slowapi | +11% / +5% | +13% / +9% | +17% / +14% | +17% / +12% |
-| limited | vs fastapi-limiter | -21% / -18% | -9% / -6% | -6% / -5% | -3% / -5% |
+| allowed | vs slowapi | -25% / -17% | -14% / -17% | -25% / -23% | -24% / -24% |
+| allowed | vs fastapi-limiter | -15% / -12% | +6% / +2% | -2% / +1% | -3% / -4% |
+| limited | vs slowapi | +4% / +8% | +15% / +15% | +16% / +18% | +19% / +11% |
+| limited | vs fastapi-limiter | -16% / -16% | -5% / +8% | -6% / +0% | -1% / +5% |
 
 ### Interpretation
 
 - **The HTTP stack dominates every library.** The plain app runs at
-  ~3,266–3,853 req/s in-process on this box; all three limiter libraries land
+  ~2,974–3,729 req/s in-process on this box; all three limiter libraries land
   in the same ~1.1–1.8k band, adding a few tenths of a millisecond per
   request. None of them is the bottleneck a deployment would feel first.
 - **Client-bound, not Redis-bound.** In the concurrency sweep the benchmark
   process runs at 99–100% of a core while the Redis server stays at
   28–35% of a core — the direct evidence for client-boundedness. The raw
-  Redis floor is consistent with that: 8,964–13,874 ops/s for a single `EVALSHA`
+  Redis floor is consistent with that: 8,072–13,001 ops/s for a single `EVALSHA`
   sits well above the limiter-only path's ~3.4–4.5k req/s, while the
-  two-round-trip floor (3,586–7,198 ops/s) straddles the concurrent end of that
+  two-round-trip floor (3,830–6,485 ops/s) straddles the concurrent end of that
   range — Redis headroom is comfortable at low concurrency but is nearly
   spent once the client saturates at high concurrency.
 - **The ranking depends on the path.** On the allowed path moderato is
@@ -418,10 +418,10 @@ Percent difference in throughput, moderato versus the library, run 1 / run
   server-authoritative time, then the Lua script); slowapi and
   fastapi-limiter make one (confirmed with the command counts above). That
   buys windows that stay consistent across application instances without
-  trusting client clocks. At 1 client moderato's p50 is 0.77–0.78 ms
-  against slowapi's 0.54–0.58 ms on the allowed path; the raw floor
+  trusting client clocks. At 1 client moderato's p50 is 0.75–0.77 ms
+  against slowapi's 0.57–0.58 ms on the allowed path; the raw floor
   attributes only ~0.1 ms to the extra round trip (at 1 client,
-  0.240–0.279 ms per two-call decision against 0.106–0.112 ms per one-call
+  0.235–0.261 ms per two-call decision against 0.101–0.124 ms per one-call
   decision), so the rest of the ~0.2 ms gap is client-side work around the
   second call, which this benchmark does not isolate.
   Whether the tradeoff is right depends on whether you need distributed time

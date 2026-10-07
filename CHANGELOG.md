@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.4.0 (2026-10-07)
 
 ### Changed
 
@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed window: a request arriving as a window ended could be admitted uncounted (the counter key was deleted by an already-past `EXPIREAT`). Window selection now happens atomically inside the Lua script from Redis time.
+- Token bucket: a denied check's `reset_at` (and `Retry-After`) was floored to the whole second, so it could report up to one second earlier than the actual refill moment. It is now computed from the millisecond check time.
+- Flaky `test_concurrent_multi_tenant` now gates on the Redis clock so it cannot straddle a window boundary on any runner.
 
 - `trust_proxy_headers=True` now takes precedence over the direct client address, which is the proxy itself behind a reverse proxy; previously all clients shared the proxy's bucket.
 - Flaky `test_sustained_high_load` now uses an hour window so the allowed total is deterministic on any runner.

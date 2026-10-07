@@ -182,8 +182,9 @@ window apart, then every key still alive is measured:
 
 Identical across both runs. The ± here is the spread across keys, not
 across trials. One key-name artifact to read past: `MEMORY USAGE` rises in
-32-byte allocator steps as the key name grows, and the token bucket's
-dict-encoded hash sits on one of those steps. Reproduced directly: a
+allocator size-class increments as the key name grows, and the token
+bucket's dict-encoded hash sits on one of those boundaries. Reproduced
+directly: a
 token-bucket key whose full Redis name is 90 characters measures 184 B,
 the same key at 95 characters measures 200 B. These runs use the run ids
 `20261007T-postmerge5/6`, whose names land past that step, so every

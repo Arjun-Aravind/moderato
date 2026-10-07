@@ -2,12 +2,13 @@
 -- Implements sliding window algorithm with weighted previous window
 -- Uses integer-only arithmetic to avoid Lua floating-point inconsistencies
 --
--- KEYS[1] = current window key (e.g., "ratelimit:user123:default:sliding:1700000100")
--- KEYS[2] = previous window key (e.g., "ratelimit:user123:default:sliding:1700000040")
+-- KEYS[1] = window key prefix ending in ':' (e.g., "ratelimit:user123:default:sliding:")
+-- NOTE: the current and previous window keys (prefix .. window_start) are
+-- derived inside the script, so Redis Cluster deployments need a per-tenant
+-- hash tag in the prefix (e.g. "ratelimit:{user123}:default:sliding:").
 -- ARGV[1] = max_requests (e.g., 100000 for 100 requests with 1000x multiplier)
 -- ARGV[2] = window_seconds (e.g., 60 for 1 minute window)
--- ARGV[3] = current_timestamp_ms (milliseconds since epoch, from Redis TIME)
--- ARGV[4] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
+-- ARGV[3] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
 --
 -- Returns: {allowed (1 or 0), remaining, retry_after_ms, reset_at}
 --
@@ -22,16 +23,17 @@
 -- - This gives a value 0-1000 representing 0.000 to 1.000
 -- - weighted_count = current_count + (previous_count * weight_fp) / 1000
 
-local current_key = KEYS[1]
-local previous_key = KEYS[2]
+local key_prefix = KEYS[1]
 local max_requests = tonumber(ARGV[1])
 local window_seconds = tonumber(ARGV[2])
-local current_timestamp_ms = tonumber(ARGV[3])
-local current_timestamp = math.floor(current_timestamp_ms / 1000)
-local cost_arg = ARGV[4]
+local cost_arg = ARGV[3]
 local cost = 1000
 if cost_arg then
     cost = tonumber(cost_arg)
+end
+
+if window_seconds == nil or window_seconds <= 0 or window_seconds ~= math.floor(window_seconds) then
+    return redis.error_reply("window_seconds must be a positive integer")
 end
 
 -- Defense in depth: request cost must consume capacity
@@ -39,13 +41,22 @@ if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
     return redis.error_reply("cost must be a positive integer")
 end
 
--- Get counts from both windows
-local current_count = tonumber(redis.call('GET', current_key)) or 0
-local previous_count = tonumber(redis.call('GET', previous_key)) or 0
+-- Select the windows from Redis TIME in this atomic script. A client-side
+-- TIME call costs an extra round trip and can pick a window that has
+-- already ended by the time the script runs.
+local time = redis.call('TIME')
+local current_timestamp = tonumber(time[1])
+local current_timestamp_ms = current_timestamp * 1000 + math.floor(tonumber(time[2]) / 1000)
 
 -- Calculate position in current window using integer math
 local window_start = current_timestamp - (current_timestamp % window_seconds)
 local elapsed_in_window = current_timestamp - window_start
+local current_key = key_prefix .. window_start
+local previous_key = key_prefix .. (window_start - window_seconds)
+
+-- Get counts from both windows
+local current_count = tonumber(redis.call('GET', current_key)) or 0
+local previous_count = tonumber(redis.call('GET', previous_key)) or 0
 
 -- Calculate weight for previous window using fixed-point arithmetic (0-1000 scale)
 -- Weight decreases as we progress through current window

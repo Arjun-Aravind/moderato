@@ -20,6 +20,16 @@ from moderato import RateLimitExceeded
 class TestSlidingWindowBasic:
     """Basic functionality tests for sliding window algorithm."""
 
+    async def test_window_is_selected_inside_lua(self, clean_limiter, monkeypatch):
+        async def unexpected_time_call():
+            raise AssertionError("sliding-window check must get time inside Lua")
+
+        monkeypatch.setattr(clean_limiter.backend, "get_redis_time", unexpected_time_call)
+
+        assert await clean_limiter.check(
+            key=f"lua-time-{uuid4().hex}", rate="1/minute", algorithm="sliding_window"
+        )
+
     async def test_basic_rate_limiting(self, clean_limiter):
         """Test that basic rate limiting allows and denies correctly."""
         limiter = clean_limiter

@@ -333,15 +333,9 @@ class RateLimiter:
         max_requests = requests * 1000
         cost_with_multiplier = cost * 1000
 
-        if algorithm != "fixed_window":
-            # Token and sliding windows use Redis server time for
-            # consistency in distributed deployments.
-            redis_time_seconds, redis_time_us = await self.backend.get_redis_time()
-
+        # Every script reads Redis TIME itself, so each decision is one
+        # round trip and windows are never selected from a stale clock read.
         if algorithm == "fixed_window":
-            # The script derives its Redis-time window atomically. Passing
-            # a prefix (rather than a client-time window key) prevents a
-            # boundary between TIME and EVAL from creating an expired key.
             key_prefix = generate_key(
                 self.config.key_prefix,
                 key,
@@ -371,7 +365,6 @@ class RateLimiter:
             # Keep as float: integer division would truncate low rates like
             # 1/hour (1000 // 3600 == 0) to a bucket that never refills.
             refill_rate_per_second = max_requests / window_seconds
-            current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
             result = await self._run_backend_operation(
                 "check_token_bucket",
                 self.backend.check_token_bucket(
@@ -379,12 +372,12 @@ class RateLimiter:
                     max_tokens=max_requests,
                     refill_rate_per_second=refill_rate_per_second,
                     window_seconds=window_seconds,
-                    current_time_ms=current_time_ms,
                     cost=cost_with_multiplier,
                 ),
             )
         elif algorithm == "sliding_window":
-            # Sliding window needs base key (windows calculated in algorithm)
+            # The script appends the current and previous window starts,
+            # keeping the "<base>:sliding:<window_start>" key layout.
             base_key = generate_key(
                 self.config.key_prefix,
                 key,
@@ -393,19 +386,12 @@ class RateLimiter:
                 "sliding",
                 scope=scope,
             )
-            current_time = redis_time_seconds
-            current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
-            window_start = current_time - (current_time % window_seconds)
-            previous_window_start = window_start - window_seconds
-
             result = await self._run_backend_operation(
                 "check_sliding_window",
                 self.backend.check_sliding_window(
-                    current_key=f"{base_key}:{window_start}",
-                    previous_key=f"{base_key}:{previous_window_start}",
-                    max_requests=max_requests,
-                    window_seconds=window_seconds,
-                    current_time_ms=current_time_ms,
+                    f"{base_key}:",
+                    max_requests,
+                    window_seconds,
                     cost=cost_with_multiplier,
                 ),
             )
@@ -418,10 +404,6 @@ class RateLimiter:
         )
 
         reset_at = result.reset_at
-        if algorithm != "fixed_window" and not result.allowed and reset_at is not None:
-            # Preserve the enforced wait when client-time algorithms return
-            # a stale boundary. Fixed-window Lua derives its own boundary.
-            reset_at = max(reset_at, redis_time_seconds + retry_after_seconds)
 
         if self.metrics is not None:
             self.metrics.observe_check_duration(algorithm, time.perf_counter() - check_started)

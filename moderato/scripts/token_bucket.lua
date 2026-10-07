@@ -5,8 +5,7 @@
 -- ARGV[1] = max_tokens (bucket capacity, e.g., 100000 for 100 tokens with 1000x multiplier)
 -- ARGV[2] = refill_rate_per_second (tokens per second, float with 1000x multiplier)
 -- ARGV[3] = window_seconds (window duration for TTL calculation)
--- ARGV[4] = current_time_ms (current timestamp in milliseconds)
--- ARGV[5] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
+-- ARGV[4] = cost (tokens to consume, e.g., 1000 for cost=1 with 1000x multiplier)
 --
 -- Returns: {allowed (1 or 0), remaining, retry_after_ms, reset_at}
 --
@@ -21,17 +20,26 @@ local key = KEYS[1]
 local max_tokens = tonumber(ARGV[1])
 local refill_rate_per_second = tonumber(ARGV[2])
 local window_seconds = tonumber(ARGV[3])
-local current_time_ms = tonumber(ARGV[4])
-local cost_arg = ARGV[5]
+local cost_arg = ARGV[4]
 local cost = 1000
 if cost_arg then
     cost = tonumber(cost_arg)
+end
+
+if window_seconds == nil or window_seconds <= 0 or window_seconds ~= math.floor(window_seconds) then
+    return redis.error_reply("window_seconds must be a positive integer")
 end
 
 -- Defense in depth: request cost must consume capacity
 if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
     return redis.error_reply("cost must be a positive integer")
 end
+
+-- Reading TIME here instead of in the client saves a round trip per check
+-- and keeps every instance on the Redis clock.
+local time = redis.call('TIME')
+local current_time_s = tonumber(time[1])
+local current_time_ms = current_time_s * 1000 + math.floor(tonumber(time[2]) / 1000)
 
 -- Get current bucket state
 local bucket = redis.call('HMGET', key, 'tokens', 'last_refill_ms')
@@ -105,13 +113,17 @@ end
 -- Return results
 -- allowed: 1 if request should proceed, 0 if rate limited
 -- remaining: number of tokens remaining in bucket (with multiplier)
--- reset_at is when the bucket is full again. Both values are based on the
--- Redis TIME value supplied by the caller, never the application clock.
+-- reset_at is when the bucket is full again, based on Redis TIME.
 local full_refill_after_ms = 0
 if new_tokens < max_tokens and refill_rate_per_second > 0 then
     full_refill_after_ms = math.ceil(((max_tokens - new_tokens) * 1000) / refill_rate_per_second)
 end
 local reset_at = math.ceil((effective_refill_ms + full_refill_after_ms) / 1000)
+if allowed == 0 then
+    -- A denied caller must not be told to come back before Retry-After,
+    -- which clients see rounded up to at least one second.
+    reset_at = math.max(reset_at, current_time_s + math.max(1, math.ceil(retry_after_ms / 1000)))
+end
 
 -- retry_after_ms: milliseconds until enough tokens available (0 if allowed)
 return {allowed, remaining, retry_after_ms, reset_at}

@@ -251,7 +251,7 @@ class RedisBackend:
         max_tokens: int,
         refill_rate_per_second: float,
         window_seconds: int,
-        current_time_ms: int,
+        *,
         cost: int = 1000,
     ) -> RateLimitResult:
         """
@@ -267,7 +267,6 @@ class RedisBackend:
                 multiplier, e.g. 0.278 for a 1/hour limit). Must not be rounded
                 to an integer or low rates truncate to zero refill.
             window_seconds: Window duration in seconds (for TTL calculation)
-            current_time_ms: Current Unix timestamp in milliseconds
             cost: Tokens to consume (with 1000x multiplier, default 1000)
 
         Returns:
@@ -290,24 +289,18 @@ class RedisBackend:
                         str(max_tokens).encode(),  # ARGV[1]
                         str(refill_rate_per_second).encode(),  # ARGV[2] - float tokens/sec
                         str(window_seconds).encode(),  # ARGV[3] - for TTL
-                        str(current_time_ms).encode(),  # ARGV[4] - millisecond timestamp
-                        str(cost).encode(),  # ARGV[5]
+                        str(cost).encode(),  # ARGV[4]
                     )
                 except NoScriptError:
                     # Script not in cache, fall back to EVAL
                     logger.debug("Script not in cache, using EVAL")
                     result = await self._execute_token_bucket_script(
-                        key,
-                        max_tokens,
-                        refill_rate_per_second,
-                        window_seconds,
-                        current_time_ms,
-                        cost,
+                        key, max_tokens, refill_rate_per_second, window_seconds, cost
                     )
             else:
                 # No SHA available, use EVAL
                 result = await self._execute_token_bucket_script(
-                    key, max_tokens, refill_rate_per_second, window_seconds, current_time_ms, cost
+                    key, max_tokens, refill_rate_per_second, window_seconds, cost
                 )
 
             # Parse result
@@ -339,7 +332,6 @@ class RedisBackend:
         max_tokens: int,
         refill_rate_per_second: float,
         window_seconds: int,
-        current_time_ms: int,
         cost: int = 1000,
     ) -> Any:
         """Execute token bucket Lua script with EVAL."""
@@ -357,8 +349,7 @@ class RedisBackend:
             str(max_tokens).encode(),  # ARGV[1]
             str(refill_rate_per_second).encode(),  # ARGV[2]
             str(window_seconds).encode(),  # ARGV[3]
-            str(current_time_ms).encode(),  # ARGV[4]
-            str(cost).encode(),  # ARGV[5]
+            str(cost).encode(),  # ARGV[4]
         )
 
     async def get_token_bucket_usage(self, key: str) -> dict[str, Any]:
@@ -394,11 +385,10 @@ class RedisBackend:
 
     async def check_sliding_window(
         self,
-        current_key: str,
-        previous_key: str,
+        key_prefix: str,
         max_requests: int,
         window_seconds: int,
-        current_time_ms: int,
+        *,
         cost: int = 1000,
     ) -> RateLimitResult:
         """
@@ -408,11 +398,12 @@ class RedisBackend:
         combining current and previous windows with weighted average.
 
         Args:
-            current_key: Redis key for current window
-            previous_key: Redis key for previous window
+            key_prefix: Window key prefix ending in ':'. The Lua script appends
+                the current and previous window starts, derived from Redis
+                time. On Redis Cluster, include a per-tenant hash tag so both
+                derived keys stay in the same slot.
             max_requests: Maximum requests allowed (with 1000x multiplier)
             window_seconds: Size of the time window in seconds
-            current_time_ms: Current Redis Unix timestamp in milliseconds
             cost: Tokens to consume (with 1000x multiplier, default 1000)
 
         Returns:
@@ -430,29 +421,22 @@ class RedisBackend:
                 try:
                     result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
                         self._script_shas["sliding_window"],
-                        2,  # number of keys (current + previous)
-                        current_key.encode(),  # KEYS[1]
-                        previous_key.encode(),  # KEYS[2]
+                        1,  # number of keys
+                        key_prefix.encode(),  # KEYS[1]
                         str(int(max_requests)).encode(),  # ARGV[1]
                         str(window_seconds).encode(),  # ARGV[2]
-                        str(current_time_ms).encode(),  # ARGV[3]
-                        str(cost).encode(),  # ARGV[4]
+                        str(cost).encode(),  # ARGV[3]
                     )
                 except NoScriptError:
                     # Script not in cache, fall back to EVAL
                     logger.debug("Script not in cache, using EVAL")
-                    result = await self._execute_sliding_window_script(
-                        current_key,
-                        previous_key,
-                        max_requests,
-                        window_seconds,
-                        current_time_ms,
-                        cost,
+                    result = await self._execute_script(
+                        "sliding_window", key_prefix, max_requests, window_seconds, cost
                     )
             else:
                 # No SHA available, use EVAL
-                result = await self._execute_sliding_window_script(
-                    current_key, previous_key, max_requests, window_seconds, current_time_ms, cost
+                result = await self._execute_script(
+                    "sliding_window", key_prefix, max_requests, window_seconds, cost
                 )
 
             # Parse result
@@ -477,34 +461,6 @@ class RedisBackend:
         except Exception as e:
             logger.error(f"Unexpected error during sliding window check: {e}")
             raise BackendError(f"Unexpected error: {e}") from e
-
-    async def _execute_sliding_window_script(
-        self,
-        current_key: str,
-        previous_key: str,
-        max_requests: int,
-        window_seconds: int,
-        current_time_ms: int,
-        cost: int = 1000,
-    ) -> Any:
-        """Execute sliding window Lua script with EVAL."""
-        if not self._redis:
-            raise BackendError("Redis not connected")
-
-        script = self._scripts.get("sliding_window")
-        if not script:
-            raise BackendError("Sliding window script not loaded")
-
-        return await self._redis.eval(  # type: ignore[no-untyped-call]
-            script,
-            2,  # number of keys
-            current_key.encode(),  # KEYS[1]
-            previous_key.encode(),  # KEYS[2]
-            str(int(max_requests)).encode(),  # ARGV[1]
-            str(window_seconds).encode(),  # ARGV[2]
-            str(current_time_ms).encode(),  # ARGV[3]
-            str(cost).encode(),  # ARGV[4]
-        )
 
     async def reset(self, key: str) -> bool:
         """

@@ -759,29 +759,63 @@ class TestLuaCostGuard:
     async def test_token_bucket_lua_rejects_invalid_cost(self, backend, invalid_cost):
         key = f"lua-token-{uuid4().hex}"
         with pytest.raises(BackendError):
-            await backend.check_token_bucket(
-                key, 5000, 10.0, 60, self._future_ts(60) * 1000, cost=invalid_cost
-            )
+            await backend.check_token_bucket(key, 5000, 10.0, 60, cost=invalid_cost)
         # Tokens must still be full after the rejected call.
-        result = await backend.check_token_bucket(
-            key, 5000, 10.0, 60, self._future_ts(60) * 1000, cost=1000
-        )
+        result = await backend.check_token_bucket(key, 5000, 10.0, 60, cost=1000)
         assert result.allowed
         assert result.remaining == 4000
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
-    async def test_sliding_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
-        current_key = f"lua-slide-cur-{uuid4().hex}"
-        previous_key = f"lua-slide-prev-{uuid4().hex}"
-        now = self._future_ts(60)
-        with pytest.raises(BackendError):
-            await backend.check_sliding_window(
-                current_key, previous_key, 3000, 60, now, cost=invalid_cost
+    @pytest.mark.parametrize("invalid_window", [0, -1, 0.5, "invalid"])
+    async def test_token_bucket_lua_rejects_invalid_window(
+        self, backend, redis_client, invalid_window
+    ):
+        key = f"lua-token-{uuid4().hex}"
+        with pytest.raises(BackendError, match="window_seconds must be a positive integer"):
+            await backend.check_token_bucket(key, 5000, 10.0, invalid_window)
+        assert not await redis_client.exists(key)
+
+    @pytest.mark.asyncio
+    async def test_token_bucket_rejects_legacy_positional_time(self, backend):
+        """The removed timestamp slot must fail loudly, not become request cost."""
+        with pytest.raises(TypeError):
+            await backend.check_token_bucket(
+                f"lua-token-{uuid4().hex}", 5000, 10.0, 60, self._future_ts(0) * 1000
             )
-        # The window must still be empty after the rejected call.
-        result = await backend.check_sliding_window(
-            current_key, previous_key, 3000, 60, now, cost=1000
-        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
+    async def test_sliding_window_lua_rejects_invalid_cost(
+        self, backend, redis_client, invalid_cost
+    ):
+        key_prefix = f"lua-slide-{uuid4().hex}:"
+        with pytest.raises(BackendError):
+            await backend.check_sliding_window(key_prefix, 3000, 60, cost=invalid_cost)
+        # Validation happens before key derivation or mutation.
+        assert not [key async for key in redis_client.scan_iter(match=f"{key_prefix}*")]
+        result = await backend.check_sliding_window(key_prefix, 3000, 60, cost=1000)
         assert result.allowed
         assert result.remaining == 2000
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("invalid_window", [0, -1, 0.5, "invalid"])
+    async def test_sliding_window_lua_rejects_invalid_window(
+        self, backend, redis_client, invalid_window
+    ):
+        key_prefix = f"lua-slide-{uuid4().hex}:"
+        with pytest.raises(BackendError, match="window_seconds must be a positive integer"):
+            await backend.check_sliding_window(key_prefix, 3000, invalid_window)
+        assert not [key async for key in redis_client.scan_iter(match=f"{key_prefix}*")]
+
+    @pytest.mark.asyncio
+    async def test_sliding_window_derives_keys_from_redis_time(self, backend, redis_client):
+        key_prefix = f"lua-slide-{uuid4().hex}:"
+        before, _ = await redis_client.time()
+        await backend.check_sliding_window(key_prefix, 3000, 60, cost=1000)
+        after, _ = await redis_client.time()
+
+        keys = [key async for key in redis_client.scan_iter(match=f"{key_prefix}*")]
+        assert len(keys) == 1
+        window_start = int(keys[0].removeprefix(key_prefix))
+        assert window_start % 60 == 0
+        assert before - before % 60 <= window_start <= after - after % 60

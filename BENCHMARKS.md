@@ -59,8 +59,9 @@ share two vCPUs.
   (`ratelimit:bench%3A<run-id>%3A…`), swept before and after each run.
 - **Comparison isolation.** In the head-to-head below each library's
   connections are closed after its scenario pair, and every measured
-  trial starts with Redis-clock runway sized from the previous trial's
-  duration and fails the run if it straddles a minute boundary — so a
+  trial starts with Redis-clock runway — 10 s for a level's first trial,
+  then 1.5× the previous trial's measured duration (capped below a
+  minute) — and fails the run if it straddles a minute boundary, so a
   real fixed-window quota cannot reset mid-trial and skew the allow
   counts.
 - **Memory is measured, not estimated.** Per-key memory comes from Redis'
@@ -339,8 +340,9 @@ Same shape; each level resets the quota before measuring. The limit is a
 real fixed window of 100 per minute, so a trial straddling a minute
 boundary would admit a second batch of 100 and make its allow counts
 incomparable across libraries — an earlier run pair caught exactly that.
-Each measured trial now starts with Redis-clock runway sized from the
-previous trial's duration and fails the run if it crosses the boundary,
+Each measured trial now starts with Redis-clock runway (10 s for a
+level's first trial, then 1.5× the previous trial's duration, capped
+below a minute) and fails the run if it crosses the boundary,
 so every level allows exactly the
 first 100 timed requests and returns 2,900 × 429 (checked programmatically
 over all 32 level results per run; visible in the `status_counts` of the

@@ -335,7 +335,10 @@ async def measure_app(
                 # instead of publishing skewed allow counts.
                 if clock is not None:
                     floor_s = 10.0 if last_trial_seconds is None else last_trial_seconds * 1.5
-                    await wait_for_runway(floor_s + 1.0)
+                    # Cap below a minute: a requirement of >= 60 s of runway
+                    # is unsatisfiable and would wait forever. The post-trial
+                    # boundary check below still fails the run loudly.
+                    await wait_for_runway(min(floor_s + 1.0, 55.0))
                     minute_before = int(await redis_seconds()) // 60
                 start = time.perf_counter()
                 trial_results = await asyncio.gather(*[worker(w) for w in range(num_clients)])

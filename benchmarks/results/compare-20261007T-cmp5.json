@@ -1,0 +1,972 @@
+{
+  "schema_version": 1,
+  "benchmark": "moderato-library-comparison",
+  "run_id": "20261007T-cmp5",
+  "started_at_utc": "2026-10-07T08:16:02.719894+00:00",
+  "redis_url_host": "localhost",
+  "redis_placement": "localhost (same machine)",
+  "environment": {
+    "platform": "Linux",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.60GHz",
+    "cpu_count": 2,
+    "kernel": "6.1.158+",
+    "python_version": "3.12.14",
+    "redis_version": "7.0.15"
+  },
+  "versions": {
+    "moderato": "0.3.0",
+    "fastapi": "0.141.1",
+    "starlette": "1.7.0",
+    "httpx": "0.28.1",
+    "redis": "5.3.1",
+    "slowapi": "0.1.10",
+    "limits": "5.8.0",
+    "fastapi-limiter": "0.2.0",
+    "pyrate-limiter": "4.5.0"
+  },
+  "methodology": {
+    "transport": "httpx ASGITransport (in-process ASGI, no network)",
+    "app_shape": "single GET / returning {\"msg\": \"ok\"}, per-IP keying, client 127.0.0.1",
+    "requests_per_trial": 1000,
+    "trials": 3,
+    "levels": [
+      1,
+      10,
+      50,
+      100
+    ],
+    "redis_state": "every library's keys are namespaced under a run-specific prefix; those keys are deleted between levels and between (library, scenario) pairs, so each level starts from a fresh quota and the database is never flushed",
+    "limited_scenario_note": "each level starts from a fresh quota (owned keys are deleted before every level), so exactly the first 100 timed requests at every level are allowed and the remaining 2,900 are rejected with 429; the 20-request warm-up runs once before the first level and its quota consumption is wiped by that level's reset",
+    "note": "compares libraries as-shipped per their documented usage"
+  },
+  "scenarios": {
+    "allowed_1m_per_minute/plain-fastapi": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3803.6425,
+              3814.5081,
+              3548.8545
+            ],
+            "mean": 3722.335,
+            "stdev": 150.3368,
+            "cv_pct": 4.04,
+            "min": 3548.8545,
+            "median": 3803.6425,
+            "max": 3814.5081
+          },
+          "latency_p50_ms": 0.254,
+          "latency_p99_ms": 0.4717,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3751.8289,
+              3797.7,
+              3855.4213
+            ],
+            "mean": 3801.6501,
+            "stdev": 51.909,
+            "cv_pct": 1.37,
+            "min": 3751.8289,
+            "median": 3797.7,
+            "max": 3855.4213
+          },
+          "latency_p50_ms": 0.2523,
+          "latency_p99_ms": 0.4291,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3781.0505,
+              3504.8168,
+              3684.742
+            ],
+            "mean": 3656.8698,
+            "stdev": 140.2102,
+            "cv_pct": 3.83,
+            "min": 3504.8168,
+            "median": 3684.742,
+            "max": 3781.0505
+          },
+          "latency_p50_ms": 0.2564,
+          "latency_p99_ms": 0.4924,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3814.3054,
+              3051.8414,
+              3037.5007
+            ],
+            "mean": 3301.2158,
+            "stdev": 444.4065,
+            "cv_pct": 13.46,
+            "min": 3037.5007,
+            "median": 3051.8414,
+            "max": 3814.3054
+          },
+          "latency_p50_ms": 0.2617,
+          "latency_p99_ms": 1.0309,
+          "status_counts": {
+            "200": 3000
+          }
+        }
+      ]
+    },
+    "allowed_1m_per_minute/moderato": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1324.383,
+              1214.0656,
+              1080.7262
+            ],
+            "mean": 1206.3916,
+            "stdev": 122.0095,
+            "cv_pct": 10.11,
+            "min": 1080.7262,
+            "median": 1214.0656,
+            "max": 1324.383
+          },
+          "latency_p50_ms": 0.7729,
+          "latency_p99_ms": 1.4897,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1476.9369,
+              1498.175,
+              1499.4969
+            ],
+            "mean": 1491.5363,
+            "stdev": 12.6607,
+            "cv_pct": 0.85,
+            "min": 1476.9369,
+            "median": 1498.175,
+            "max": 1499.4969
+          },
+          "latency_p50_ms": 6.4887,
+          "latency_p99_ms": 8.8066,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1109.8668,
+              1204.7508,
+              1408.9612
+            ],
+            "mean": 1241.1929,
+            "stdev": 152.8411,
+            "cv_pct": 12.31,
+            "min": 1109.8668,
+            "median": 1204.7508,
+            "max": 1408.9612
+          },
+          "latency_p50_ms": 36.0161,
+          "latency_p99_ms": 81.5218,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1418.7677,
+              1375.4406,
+              1371.7716
+            ],
+            "mean": 1388.66,
+            "stdev": 26.1385,
+            "cv_pct": 1.88,
+            "min": 1371.7716,
+            "median": 1375.4406,
+            "max": 1418.7677
+          },
+          "latency_p50_ms": 70.0432,
+          "latency_p99_ms": 96.6535,
+          "status_counts": {
+            "200": 3000
+          }
+        }
+      ]
+    },
+    "allowed_1m_per_minute/slowapi": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1816.6634,
+              1724.1206,
+              1672.3345
+            ],
+            "mean": 1737.7062,
+            "stdev": 73.1172,
+            "cv_pct": 4.21,
+            "min": 1672.3345,
+            "median": 1724.1206,
+            "max": 1816.6634
+          },
+          "latency_p50_ms": 0.5412,
+          "latency_p99_ms": 0.9624,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1840.9026,
+              1808.5218,
+              1717.9873
+            ],
+            "mean": 1789.1372,
+            "stdev": 63.7092,
+            "cv_pct": 3.56,
+            "min": 1717.9873,
+            "median": 1808.5218,
+            "max": 1840.9026
+          },
+          "latency_p50_ms": 0.5425,
+          "latency_p99_ms": 0.7949,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1722.5479,
+              1716.2598,
+              1661.4639
+            ],
+            "mean": 1700.0906,
+            "stdev": 33.5991,
+            "cv_pct": 1.98,
+            "min": 1661.4639,
+            "median": 1716.2598,
+            "max": 1722.5479
+          },
+          "latency_p50_ms": 0.5579,
+          "latency_p99_ms": 0.9158,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1751.2138,
+              1588.8421,
+              1572.2128
+            ],
+            "mean": 1637.4229,
+            "stdev": 98.896,
+            "cv_pct": 6.04,
+            "min": 1572.2128,
+            "median": 1588.8421,
+            "max": 1751.2138
+          },
+          "latency_p50_ms": 0.5653,
+          "latency_p99_ms": 1.032,
+          "status_counts": {
+            "200": 3000
+          }
+        }
+      ]
+    },
+    "allowed_1m_per_minute/fastapi-limiter": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1533.8493,
+              1562.049,
+              1376.3968
+            ],
+            "mean": 1490.7651,
+            "stdev": 100.0444,
+            "cv_pct": 6.71,
+            "min": 1376.3968,
+            "median": 1533.8493,
+            "max": 1562.049
+          },
+          "latency_p50_ms": 0.6334,
+          "latency_p99_ms": 1.0529,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1365.9715,
+              1471.1251,
+              1558.8889
+            ],
+            "mean": 1465.3285,
+            "stdev": 96.5893,
+            "cv_pct": 6.59,
+            "min": 1365.9715,
+            "median": 1471.1251,
+            "max": 1558.8889
+          },
+          "latency_p50_ms": 6.5142,
+          "latency_p99_ms": 9.776,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1476.7602,
+              1411.1288,
+              1475.4631
+            ],
+            "mean": 1454.4507,
+            "stdev": 37.5235,
+            "cv_pct": 2.58,
+            "min": 1411.1288,
+            "median": 1475.4631,
+            "max": 1476.7602
+          },
+          "latency_p50_ms": 33.5896,
+          "latency_p99_ms": 41.553,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1445.893,
+              1362.0002,
+              1392.0919
+            ],
+            "mean": 1399.995,
+            "stdev": 42.5011,
+            "cv_pct": 3.04,
+            "min": 1362.0002,
+            "median": 1392.0919,
+            "max": 1445.893
+          },
+          "latency_p50_ms": 69.4697,
+          "latency_p99_ms": 83.6681,
+          "status_counts": {
+            "200": 3000
+          }
+        }
+      ]
+    },
+    "limited_100_per_minute/plain-fastapi": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3442.2564,
+              3241.0998,
+              3598.7696
+            ],
+            "mean": 3427.3752,
+            "stdev": 179.2987,
+            "cv_pct": 5.23,
+            "min": 3241.0998,
+            "median": 3442.2564,
+            "max": 3598.7696
+          },
+          "latency_p50_ms": 0.266,
+          "latency_p99_ms": 0.4933,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3627.3634,
+              3786.4669,
+              3746.9844
+            ],
+            "mean": 3720.2716,
+            "stdev": 82.8472,
+            "cv_pct": 2.23,
+            "min": 3627.3634,
+            "median": 3746.9844,
+            "max": 3786.4669
+          },
+          "latency_p50_ms": 0.2572,
+          "latency_p99_ms": 0.4375,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3617.8302,
+              3728.0083,
+              3718.2537
+            ],
+            "mean": 3688.0308,
+            "stdev": 60.9908,
+            "cv_pct": 1.65,
+            "min": 3617.8302,
+            "median": 3718.2537,
+            "max": 3728.0083
+          },
+          "latency_p50_ms": 0.2574,
+          "latency_p99_ms": 0.4663,
+          "status_counts": {
+            "200": 3000
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              3708.5782,
+              3729.9543,
+              3715.6847
+            ],
+            "mean": 3718.0724,
+            "stdev": 10.8862,
+            "cv_pct": 0.29,
+            "min": 3708.5782,
+            "median": 3715.6847,
+            "max": 3729.9543
+          },
+          "latency_p50_ms": 0.2565,
+          "latency_p99_ms": 0.4386,
+          "status_counts": {
+            "200": 3000
+          }
+        }
+      ]
+    },
+    "limited_100_per_minute/moderato": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1263.915,
+              1275.621,
+              1278.354
+            ],
+            "mean": 1272.63,
+            "stdev": 7.6701,
+            "cv_pct": 0.6,
+            "min": 1263.915,
+            "median": 1275.621,
+            "max": 1278.354
+          },
+          "latency_p50_ms": 0.7691,
+          "latency_p99_ms": 1.0665,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1428.9692,
+              1424.3437,
+              1581.4869
+            ],
+            "mean": 1478.2666,
+            "stdev": 89.4213,
+            "cv_pct": 6.05,
+            "min": 1424.3437,
+            "median": 1428.9692,
+            "max": 1581.4869
+          },
+          "latency_p50_ms": 6.606,
+          "latency_p99_ms": 9.7709,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1439.2829,
+              1385.636,
+              1268.92
+            ],
+            "mean": 1364.613,
+            "stdev": 87.1054,
+            "cv_pct": 6.38,
+            "min": 1268.92,
+            "median": 1385.636,
+            "max": 1439.2829
+          },
+          "latency_p50_ms": 34.7465,
+          "latency_p99_ms": 62.7102,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1429.5503,
+              1368.3308,
+              1320.4977
+            ],
+            "mean": 1372.7929,
+            "stdev": 54.6631,
+            "cv_pct": 3.98,
+            "min": 1320.4977,
+            "median": 1368.3308,
+            "max": 1429.5503
+          },
+          "latency_p50_ms": 70.1775,
+          "latency_p99_ms": 106.7346,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        }
+      ]
+    },
+    "limited_100_per_minute/slowapi": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1262.2194,
+              1283.8116,
+              1245.2544
+            ],
+            "mean": 1263.7618,
+            "stdev": 19.3249,
+            "cv_pct": 1.53,
+            "min": 1245.2544,
+            "median": 1262.2194,
+            "max": 1283.8116
+          },
+          "latency_p50_ms": 0.7656,
+          "latency_p99_ms": 1.0697,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1215.0883,
+              1329.4047,
+              1266.8535
+            ],
+            "mean": 1270.4488,
+            "stdev": 57.2429,
+            "cv_pct": 4.51,
+            "min": 1215.0883,
+            "median": 1266.8535,
+            "max": 1329.4047
+          },
+          "latency_p50_ms": 7.4332,
+          "latency_p99_ms": 13.2157,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1092.0003,
+              1132.8824,
+              1216.4884
+            ],
+            "mean": 1147.1237,
+            "stdev": 63.4542,
+            "cv_pct": 5.53,
+            "min": 1092.0003,
+            "median": 1132.8824,
+            "max": 1216.4884
+          },
+          "latency_p50_ms": 41.0309,
+          "latency_p99_ms": 64.7893,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1162.8551,
+              1095.4435,
+              1193.3177
+            ],
+            "mean": 1150.5388,
+            "stdev": 50.086,
+            "cv_pct": 4.35,
+            "min": 1095.4435,
+            "median": 1162.8551,
+            "max": 1193.3177
+          },
+          "latency_p50_ms": 80.9874,
+          "latency_p99_ms": 122.4584,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        }
+      ]
+    },
+    "limited_100_per_minute/fastapi-limiter": {
+      "levels": [
+        {
+          "clients": 1,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1306.4648,
+              1483.1887,
+              1650.8806
+            ],
+            "mean": 1480.178,
+            "stdev": 172.2276,
+            "cv_pct": 11.64,
+            "min": 1306.4648,
+            "median": 1483.1887,
+            "max": 1650.8806
+          },
+          "latency_p50_ms": 0.6309,
+          "latency_p99_ms": 1.0918,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 10,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1531.7705,
+              1549.3606,
+              1492.6159
+            ],
+            "mean": 1524.5823,
+            "stdev": 29.0472,
+            "cv_pct": 1.91,
+            "min": 1492.6159,
+            "median": 1531.7705,
+            "max": 1549.3606
+          },
+          "latency_p50_ms": 6.4392,
+          "latency_p99_ms": 8.4791,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 50,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1328.4542,
+              1276.8341,
+              1371.6968
+            ],
+            "mean": 1325.6617,
+            "stdev": 47.493,
+            "cv_pct": 3.58,
+            "min": 1276.8341,
+            "median": 1328.4542,
+            "max": 1371.6968
+          },
+          "latency_p50_ms": 35.9104,
+          "latency_p99_ms": 50.5549,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        },
+        {
+          "clients": 100,
+          "throughput_req_s": {
+            "trials": 3,
+            "values": [
+              1356.6595,
+              1475.6519,
+              1381.3692
+            ],
+            "mean": 1404.5602,
+            "stdev": 62.7946,
+            "cv_pct": 4.47,
+            "min": 1356.6595,
+            "median": 1381.3692,
+            "max": 1475.6519
+          },
+          "latency_p50_ms": 68.6,
+          "latency_p99_ms": 109.8628,
+          "status_counts": {
+            "200": 100,
+            "429": 2900
+          }
+        }
+      ]
+    }
+  },
+  "redis_floor": {
+    "evalsha_x1": {
+      "levels": [
+        {
+          "trials": 3,
+          "values": [
+            9050.4101,
+            8512.069,
+            8156.3421
+          ],
+          "mean": 8572.9404,
+          "stdev": 450.1315,
+          "cv_pct": 5.25,
+          "min": 8156.3421,
+          "median": 8512.069,
+          "max": 9050.4101
+        },
+        {
+          "trials": 3,
+          "values": [
+            12715.1395,
+            13439.2303,
+            13200.7707
+          ],
+          "mean": 13118.3802,
+          "stdev": 369.0095,
+          "cv_pct": 2.81,
+          "min": 12715.1395,
+          "median": 13200.7707,
+          "max": 13439.2303
+        },
+        {
+          "trials": 3,
+          "values": [
+            13197.1352,
+            13250.2641,
+            13183.3071
+          ],
+          "mean": 13210.2355,
+          "stdev": 35.3486,
+          "cv_pct": 0.27,
+          "min": 13183.3071,
+          "median": 13197.1352,
+          "max": 13250.2641
+        },
+        {
+          "trials": 3,
+          "values": [
+            12848.7237,
+            12713.3281,
+            11820.347
+          ],
+          "mean": 12460.7996,
+          "stdev": 558.7643,
+          "cv_pct": 4.48,
+          "min": 11820.347,
+          "median": 12713.3281,
+          "max": 12848.7237
+        }
+      ],
+      "at_1_client": {
+        "trials": 3,
+        "values": [
+          9050.4101,
+          8512.069,
+          8156.3421
+        ],
+        "mean": 8572.9404,
+        "stdev": 450.1315,
+        "cv_pct": 5.25,
+        "min": 8156.3421,
+        "median": 8512.069,
+        "max": 9050.4101
+      },
+      "at_100_clients": {
+        "trials": 3,
+        "values": [
+          12848.7237,
+          12713.3281,
+          11820.347
+        ],
+        "mean": 12460.7996,
+        "stdev": 558.7643,
+        "cv_pct": 4.48,
+        "min": 11820.347,
+        "median": 12713.3281,
+        "max": 12848.7237
+      }
+    },
+    "evalsha_x2": {
+      "levels": [
+        {
+          "trials": 3,
+          "values": [
+            3879.7558,
+            4188.7241,
+            4017.7986
+          ],
+          "mean": 4028.7595,
+          "stdev": 154.7755,
+          "cv_pct": 3.84,
+          "min": 3879.7558,
+          "median": 4017.7986,
+          "max": 4188.7241
+        },
+        {
+          "trials": 3,
+          "values": [
+            7337.7584,
+            7553.1571,
+            7982.0321
+          ],
+          "mean": 7624.3159,
+          "stdev": 327.9784,
+          "cv_pct": 4.3,
+          "min": 7337.7584,
+          "median": 7553.1571,
+          "max": 7982.0321
+        },
+        {
+          "trials": 3,
+          "values": [
+            6135.5644,
+            6169.47,
+            5234.2365
+          ],
+          "mean": 5846.4236,
+          "stdev": 530.4406,
+          "cv_pct": 9.07,
+          "min": 5234.2365,
+          "median": 6135.5644,
+          "max": 6169.47
+        },
+        {
+          "trials": 3,
+          "values": [
+            6059.2518,
+            6408.8094,
+            5963.9102
+          ],
+          "mean": 6143.9905,
+          "stdev": 234.242,
+          "cv_pct": 3.81,
+          "min": 5963.9102,
+          "median": 6059.2518,
+          "max": 6408.8094
+        }
+      ],
+      "at_1_client": {
+        "trials": 3,
+        "values": [
+          3879.7558,
+          4188.7241,
+          4017.7986
+        ],
+        "mean": 4028.7595,
+        "stdev": 154.7755,
+        "cv_pct": 3.84,
+        "min": 3879.7558,
+        "median": 4017.7986,
+        "max": 4188.7241
+      },
+      "at_100_clients": {
+        "trials": 3,
+        "values": [
+          6059.2518,
+          6408.8094,
+          5963.9102
+        ],
+        "mean": 6143.9905,
+        "stdev": 234.242,
+        "cv_pct": 3.81,
+        "min": 5963.9102,
+        "median": 6059.2518,
+        "max": 6408.8094
+      }
+    }
+  },
+  "ended_at_utc": "2026-10-07T08:17:13.740125+00:00",
+  "duration_seconds": 71.02
+}

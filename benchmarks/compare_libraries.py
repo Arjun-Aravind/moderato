@@ -273,17 +273,30 @@ async def measure_app(
     levels: Sequence[int],
     requests_per_trial: int,
     trials: int,
-    before_level: Optional[Callable[[], Any]] = None,
+    clock: Optional[Callable[[], Awaitable[tuple[int, int]]]] = None,
 ) -> dict[str, Any]:
     """Drive one app through the shared in-process client at each concurrency.
 
     ``reset_state`` runs between levels so each level starts from a fresh
-    quota. ``before_level`` (also run per level) lets the caller gate a
-    level on conditions such as minute-boundary runway, so the limited
-    path's fixed-window quota cannot reset mid-level and skew the allow
-    counts.
+    quota. ``clock`` (the Redis server's time) enables boundary gating: a
+    trial straddling a minute boundary would reset a fixed-window quota
+    mid-trial and skew the limited path's allow counts, so each trial waits
+    for enough runway (sized from the previous trial's measured duration)
+    and the run fails loudly if a trial crosses the boundary anyway.
     """
     import httpx
+
+    async def redis_seconds() -> float:
+        seconds, micros = await clock()
+        return seconds + micros / 1_000_000
+
+    async def wait_for_runway(required: float) -> None:
+        while True:
+            now = await redis_seconds()
+            runway = math.ceil(now / 60) * 60 - now
+            if runway >= required:
+                return
+            await asyncio.sleep(runway + 0.05)
 
     rows = []
     transport = httpx.ASGITransport(app=app)
@@ -294,12 +307,11 @@ async def measure_app(
 
         for num_clients in levels:
             await reset_state()
-            if before_level is not None:
-                await before_level()
             per_client = requests_per_trial // num_clients
             rates: list[float] = []
             latencies: list[float] = []
             status_counts: dict[int, int] = {}
+            last_trial_seconds: Optional[float] = None
 
             async def worker(
                 worker_id: int, count: int = per_client
@@ -315,10 +327,26 @@ async def measure_app(
                     )
                 return measured, worker_statuses
 
+            minute_before: Optional[int] = None
             for _ in range(trials):
+                # Require runway sized from the previous trial's measured
+                # duration (10 s floor for a level's first trial); a trial
+                # that crosses the boundary anyway fails the run loudly
+                # instead of publishing skewed allow counts.
+                if clock is not None:
+                    floor_s = 10.0 if last_trial_seconds is None else last_trial_seconds * 1.5
+                    await wait_for_runway(floor_s + 1.0)
+                    minute_before = int(await redis_seconds()) // 60
                 start = time.perf_counter()
                 trial_results = await asyncio.gather(*[worker(w) for w in range(num_clients)])
                 elapsed = time.perf_counter() - start
+                last_trial_seconds = elapsed
+                crossed = clock is not None and int(await redis_seconds()) // 60 != minute_before
+                if crossed:
+                    raise RuntimeError(
+                        "trial crossed a minute boundary; a fixed-window quota "
+                        "would reset mid-trial and skew the allow counts"
+                    )
                 rates.append(requests_per_trial / elapsed)
                 for chunk, worker_statuses in trial_results:
                     latencies.extend(chunk)
@@ -447,20 +475,6 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     async def reset_state() -> None:
         await delete_owned_keys(redis_client, key_prefix)
 
-    async def minute_runway() -> None:
-        # The limited scenario's quota is a real fixed window, so a level
-        # that straddles a minute boundary admits a second batch and makes
-        # its allow counts incomparable with the other libraries' levels.
-        # Start a level only with enough runway to finish before the
-        # boundary (the slowest level is a few seconds).
-        while True:
-            seconds, micros = await redis_client.time()
-            now = seconds + micros / 1_000_000
-            runway = math.ceil(now / 60) * 60 - now
-            if runway >= 15.0:
-                return
-            await asyncio.sleep(runway + 0.05)
-
     results: dict[str, Any] = {
         "schema_version": 1,
         "benchmark": "moderato-library-comparison",
@@ -524,7 +538,7 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
                     levels=LEVELS,
                     requests_per_trial=REQUESTS_PER_TRIAL,
                     trials=args.trials,
-                    before_level=minute_runway,
+                    clock=redis_client.time,
                 )
                 results["scenarios"][f"{scenario}/{name}"] = measured
                 # Close each app's limiter connections so they do not pile

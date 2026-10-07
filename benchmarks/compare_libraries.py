@@ -47,7 +47,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -162,6 +162,7 @@ async def build_moderato_app(redis_url: str, limit_per_minute: int, key_prefix: 
     async def index(request: Request):
         return {"msg": "ok"}
 
+    app.state.close_limiter = limiter.close
     return app
 
 
@@ -178,6 +179,9 @@ async def build_slowapi_app(redis_url: str, limit_per_minute: int, key_prefix: s
     )
     app = FastAPI()
     app.state.limiter = limiter
+    # limits wraps a sync redis client; expose its close for the harness
+    # teardown (sync, so the caller must run it in a thread).
+    app.state.close_limiter_sync = limiter._storage.storage.close
     app.add_exception_handler(SlowAPIRateLimitExceeded, _rate_limit_exceeded_handler)
 
     @app.get("/")
@@ -208,6 +212,7 @@ async def build_fastapi_limiter_app(redis_url: str, limit_per_minute: int, key_p
     async def index(request: Request):
         return {"msg": "ok"}
 
+    app.state.close_limiter = client.aclose
     return app
 
 
@@ -268,11 +273,15 @@ async def measure_app(
     levels: Sequence[int],
     requests_per_trial: int,
     trials: int,
+    before_level: Optional[Callable[[], Any]] = None,
 ) -> dict[str, Any]:
     """Drive one app through the shared in-process client at each concurrency.
 
     ``reset_state`` runs between levels so each level starts from a fresh
-    quota and the limited-path allow counts reproduce across runs.
+    quota. ``before_level`` (also run per level) lets the caller gate a
+    level on conditions such as minute-boundary runway, so the limited
+    path's fixed-window quota cannot reset mid-level and skew the allow
+    counts.
     """
     import httpx
 
@@ -285,6 +294,8 @@ async def measure_app(
 
         for num_clients in levels:
             await reset_state()
+            if before_level is not None:
+                await before_level()
             per_client = requests_per_trial // num_clients
             rates: list[float] = []
             latencies: list[float] = []
@@ -436,6 +447,20 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
     async def reset_state() -> None:
         await delete_owned_keys(redis_client, key_prefix)
 
+    async def minute_runway() -> None:
+        # The limited scenario's quota is a real fixed window, so a level
+        # that straddles a minute boundary admits a second batch and makes
+        # its allow counts incomparable with the other libraries' levels.
+        # Start a level only with enough runway to finish before the
+        # boundary (the slowest level is a few seconds).
+        while True:
+            seconds, micros = await redis_client.time()
+            now = seconds + micros / 1_000_000
+            runway = math.ceil(now / 60) * 60 - now
+            if runway >= 15.0:
+                return
+            await asyncio.sleep(runway + 0.05)
+
     results: dict[str, Any] = {
         "schema_version": 1,
         "benchmark": "moderato-library-comparison",
@@ -499,8 +524,17 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
                     levels=LEVELS,
                     requests_per_trial=REQUESTS_PER_TRIAL,
                     trials=args.trials,
+                    before_level=minute_runway,
                 )
                 results["scenarios"][f"{scenario}/{name}"] = measured
+                # Close each app's limiter connections so they do not pile
+                # up across the eight (scenario, library) pairs.
+                closer = getattr(app.state, "close_limiter", None)
+                if closer is not None:
+                    await closer()
+                sync_closer = getattr(app.state, "close_limiter_sync", None)
+                if sync_closer is not None:
+                    await asyncio.to_thread(sync_closer)
     finally:
         await reset_state()
         await redis_client.aclose()

@@ -14,8 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Decorated synchronous endpoints now run in a worker thread via `anyio.to_thread.run_sync` instead of blocking the event loop; `anyio` is a new main dependency.
 - `X-RateLimit-Reset` is now derived from Redis/Lua (`reset_at`) instead of the application clock, and is omitted when unknown. `RateLimitExceeded` and `CheckResult` gained `reset_at`. For token bucket, `reset_at` is the time the bucket is fully refilled.
 - Removed the unused `inject_rate_limit_headers` helper.
+- **BREAKING:** `RedisBackend.check_fixed_window()` now takes a key *prefix* ending in `:` instead of a full key. The window start is derived from Redis time inside the Lua script, which also fixes a race where a window ending between the client clock read and the script call admitted an uncounted request. Callers passing the old positional `window_end` argument positionally are still accepted (it is ignored, but deprecated); `cost` is now keyword-only. `RateLimiter` users are unaffected.
 
 ### Fixed
+
+- Fixed window: a request arriving as a window ended could be admitted uncounted (the counter key was deleted by an already-past `EXPIREAT`). Window selection now happens atomically inside the Lua script from Redis time.
 
 - `trust_proxy_headers=True` now takes precedence over the direct client address, which is the proxy itself behind a reverse proxy; previously all clients shared the proxy's bucket.
 - Flaky `test_sustained_high_load` now uses an hour window so the allowed total is deterministic on any runner.

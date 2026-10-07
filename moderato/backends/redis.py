@@ -155,7 +155,9 @@ class RedisBackend:
         ensuring thread-safe rate limiting even in distributed systems.
 
         Args:
-            key_prefix: Rate limit key prefix ending in ':' (should be pre-formatted)
+            key_prefix: Rate limit key prefix ending in ':' (should be pre-formatted).
+                On Redis Cluster, include a per-tenant hash tag so the window keys
+                derived inside the Lua script stay in the same slot.
             max_requests: Maximum requests allowed (with 1000x multiplier)
             window_seconds: Size of the time window in seconds
             _legacy_window_end: Ignored compatibility placeholder for the former

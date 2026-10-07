@@ -2,6 +2,10 @@
 -- Implements atomic rate limiting using Redis with proper window alignment
 --
 -- KEYS[1] = rate limit key prefix ending in ':' (e.g., "ratelimit:tenant123:free:")
+-- NOTE: Redis Cluster routes scripts by declared KEYS, but this script derives
+-- the real key (prefix .. window_start) internally. Until key derivation moves
+-- back to the client, cluster deployments need a per-tenant hash tag in the
+-- prefix (e.g. "ratelimit:{tenant123}:free:") so derived keys stay in slot.
 -- ARGV[1] = max_requests (e.g., 100000 for 100 requests with 1000x multiplier)
 -- ARGV[2] = window_seconds (e.g., 60 for 1 minute window)
 -- ARGV[3] = cost (e.g., 1000 for cost=1 with 1000x multiplier, default 1000)

@@ -230,10 +230,18 @@ class TestMultiTenant:
         """Test tracking usage per tenant."""
         limiter = clean_limiter
 
+        # Usage totals must all land in one fixed window; a minute boundary
+        # mid-loop would reset the counters and undercount. Use an hour
+        # window and, near its end, wait on the Redis clock for the next one.
+        now, _ = await limiter.backend.get_redis_time()
+        runway = 3600 - now % 3600
+        if runway < 30:
+            await asyncio.sleep(runway + 0.05)
+
         tenants = [
-            ("tenant-alpha", "free", "20/minute", 15),
-            ("tenant-beta", "premium", "100/minute", 50),
-            ("tenant-gamma", "enterprise", "1000/minute", 100),
+            ("tenant-alpha", "free", "1200/hour", 15),
+            ("tenant-beta", "premium", "6000/hour", 50),
+            ("tenant-gamma", "enterprise", "60000/hour", 100),
         ]
 
         for tenant_id, tenant_type, rate, request_count in tenants:

@@ -38,8 +38,7 @@ end
 -- Reading TIME here instead of in the client saves a round trip per check
 -- and keeps every instance on the Redis clock.
 local time = redis.call('TIME')
-local current_time_s = tonumber(time[1])
-local current_time_ms = current_time_s * 1000 + math.floor(tonumber(time[2]) / 1000)
+local current_time_ms = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 
 -- Get current bucket state
 local bucket = redis.call('HMGET', key, 'tokens', 'last_refill_ms')
@@ -121,8 +120,9 @@ end
 local reset_at = math.ceil((effective_refill_ms + full_refill_after_ms) / 1000)
 if allowed == 0 then
     -- A denied caller must not be told to come back before Retry-After,
-    -- which clients see rounded up to at least one second.
-    reset_at = math.max(reset_at, current_time_s + math.max(1, math.ceil(retry_after_ms / 1000)))
+    -- which clients see rounded up to at least one second from now.
+    local retry_after_s = math.max(1, math.ceil(retry_after_ms / 1000))
+    reset_at = math.max(reset_at, math.ceil((current_time_ms + retry_after_s * 1000) / 1000))
 end
 
 -- retry_after_ms: milliseconds until enough tokens available (0 if allowed)

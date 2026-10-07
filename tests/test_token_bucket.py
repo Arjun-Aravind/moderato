@@ -3,6 +3,7 @@ Tests for Token Bucket rate limiting algorithm.
 """
 
 import asyncio
+import math
 from uuid import uuid4
 
 import pytest
@@ -28,14 +29,17 @@ class TestTokenBucket:
     async def test_denied_reset_at_not_before_retry_after(self, clean_limiter):
         key = f"tb-reset-{uuid4().hex}"
         await clean_limiter.check(key=key, rate="1/hour", algorithm="token_bucket")
-        redis_now, _ = await clean_limiter.backend.get_redis_time()
+        # At 1/hour no token accrues in this gap, so the bucket's refill clock
+        # stays at the first check while Retry-After counts from the second.
+        await asyncio.sleep(1.1)
+        before_ms = await clean_limiter.backend.get_redis_time_ms()
 
         result = await clean_limiter.check_with_info(
             key=key, rate="1/hour", algorithm="token_bucket"
         )
 
         assert not result.allowed
-        assert result.reset_at >= redis_now + result.retry_after
+        assert result.reset_at >= math.ceil(before_ms / 1000 + result.retry_after)
 
     async def test_basic_token_bucket(self, clean_limiter):
         """Test basic token bucket rate limiting."""

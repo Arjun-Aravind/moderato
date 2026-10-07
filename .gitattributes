@@ -1,0 +1,2 @@
+# Committed benchmark evidence: generated data, collapse in diffs and UI.
+benchmarks/results/*.json -diff linguist-generated=true

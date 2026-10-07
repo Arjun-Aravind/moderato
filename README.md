@@ -383,15 +383,19 @@ await limiter.reset(key="user:123")
 
 ## Performance
 
-Run the benchmark suite against a local Redis instance rather than relying on hardware-independent throughput claims:
+Numbers on this page's benchmarks are measured, not claimed: the harness commits its raw results, reports variance across repeated trials, and documents the exact environment. See [BENCHMARKS.md](BENCHMARKS.md) for methodology, per-run data, and a head-to-head comparison against slowapi and fastapi-limiter.
+
+Run the benchmark suite against a local Redis instance yourself:
 
 ```bash
 docker-compose -f docker-compose.dev.yml up -d
-poetry install --with benchmarks
+poetry install
 poetry run python benchmarks/performance.py --quick
 ```
 
-The quick run reports throughput, latency percentiles, algorithm comparisons, and rate-limit accuracy. Run without `--quick` to include concurrent-client, Redis memory, and multi-tenant benchmarks. Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
+The quick run exercises the same sections with reduced sizes; drop `--quick` for the full-size suite (~60 s here, about five times the quick run). Results depend on Redis placement, network latency, hardware, Python version, and concurrency, so publish those details with any result.
+
+**Measured on a 2-vCPU sandbox with Redis 7 on localhost (CPython 3.12):** ~3.4–3.6k sequential and ~4.4–4.5k concurrent checks/s for the limiter alone (concurrency sweep run with the pool raised to 250 via the public config field; sequential p99 < 0.5 ms; under high concurrency the sweep's p99 rises into the tens of milliseconds), ~1.2–1.5k req/s end-to-end behind a FastAPI app — the same band as slowapi and fastapi-limiter under an identical ASGI workload (moderato is ahead of one or behind the other depending on the path and concurrency; see BENCHMARKS.md). The same app without a limiter does ~3.3–3.9k req/s, so per-request limiter work (including the Redis round trips) accounts for the drop. The limiter-only path is client-bound, not Redis-bound: during the concurrency sweep the single-threaded Python client sat at ~100% of a core while the Redis server used ~28–35%, and moderato's two-round-trip decisions (server `TIME` + Lua script) have a raw-Redis floor of ~3.6–7.2k ops/s on this box. Environment-specific; see [BENCHMARKS.md](BENCHMARKS.md) for the full data and caveats.
 
 **Implemented optimizations:**
 - Cached Lua scripts with `EVALSHA` and `EVAL` fallback

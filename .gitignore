@@ -71,10 +71,14 @@ dump.rdb
 *.log
 logs/
 
-# Benchmarks output
-benchmarks/results/
+# Benchmarks: plot scratch output and local run results are ignored. The JSON
+# evidence under benchmarks/results/ stays tracked once committed (git keeps
+# already-tracked files regardless of ignore rules); refresh the committed
+# evidence with `git add -f benchmarks/results/`.
 benchmarks/*.html
 benchmarks/*.png
+benchmarks/.venv-compare/
+benchmarks/results/
 
 # Documentation build
 docs/_build/

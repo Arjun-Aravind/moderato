@@ -467,8 +467,9 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "limited_scenario_note": (
                 "each level starts from a fresh quota (owned keys are deleted "
-                "before every level), so exactly the first 100 timed requests at "
-                "every level are allowed and the remaining 2,900 are rejected "
+                f"before every level), so exactly the first {LIMITED_PER_MINUTE} timed "
+                f"requests at every level are allowed and the remaining "
+                f"{REQUESTS_PER_TRIAL * args.trials - LIMITED_PER_MINUTE:,} are rejected "
                 "with 429; the 20-request warm-up runs once before the first "
                 "level and its quota consumption is wiped by that level's reset"
             ),

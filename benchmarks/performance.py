@@ -389,12 +389,15 @@ class PerformanceBenchmark:
             wall_before = time.perf_counter()
             for trial in range(trials):
                 start = time.perf_counter()
-                latencies = await asyncio.gather(
+                client_batches = await asyncio.gather(
                     *[client_work(c, trial) for c in range(num_clients)]
                 )
                 elapsed = time.perf_counter() - start
                 rates.append((num_clients * per_client) / elapsed)
-                trials_latencies.extend(latencies)
+                # One latency batch per trial (that trial's clients pooled),
+                # so the p50/p99 spread below is trial-to-trial rather than
+                # client-to-client within a single trial.
+                trials_latencies.append([x for batch in client_batches for x in batch])
             wall = time.perf_counter() - wall_before
             client_cpu = 100.0 * (time.process_time() - client_cpu_before) / wall
             redis_cpu = 100.0 * (await self._redis_cpu_seconds() - redis_cpu_before) / wall
@@ -566,12 +569,22 @@ class PerformanceBenchmark:
         for algorithm in algorithms:
             # Fixed-window keys expire at the minute boundary, so a batch
             # created across one would lose its older keys before the scan.
-            # Start only when the whole batch fits before the next
-            # boundary; the wait is skipped whenever there is enough
-            # runway.
-            now = time.time()
+            # Gate on the Redis clock (the same clock the limiter uses) and
+            # on a batch-duration estimate measured from timing probes, so
+            # the gate also holds against a remote Redis where each check
+            # costs far more than it does on localhost.
+            probe_times = []
+            for i in range(3):
+                probe_start = time.perf_counter()
+                await self.limiter.check(
+                    key=self.bench_key("memory-timing", i), rate=rate, algorithm=algorithm
+                )
+                probe_times.append(time.perf_counter() - probe_start)
+            batch_estimate = identities * max(probe_times) * 2 + 1.0
+            seconds, micros = await self.probe.time()
+            now = seconds + micros / 1_000_000
             runway = math.ceil(now / 60) * 60 - now
-            if runway < 10.0:
+            if runway < batch_estimate:
                 await asyncio.sleep(runway + 0.05)
 
             for i in range(identities):
@@ -621,6 +634,15 @@ class PerformanceBenchmark:
                 await self.limiter.check(key=key, rate=steady_rate, algorithm=algorithm)
 
             usages, keys = await self._memory_usage(self.redis_key_pattern("steady", algorithm))
+            # Fixed window and token bucket hold one live key per identity
+            # here; the sliding window's first-batch keys (TTL 2x window)
+            # are still alive, so two per identity.
+            expected_keys = steady_identities * (2 if algorithm == "sliding_window" else 1)
+            if len(usages) != expected_keys:
+                raise RuntimeError(
+                    f"{algorithm}: measured {len(usages)} of {expected_keys} steady-state "
+                    "keys; keys expired or vanished before MEMORY USAGE"
+                )
             total_bytes = sum(usages)
             steady = {
                 "identities": steady_identities,

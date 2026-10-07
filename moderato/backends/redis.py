@@ -140,7 +140,13 @@ class RedisBackend:
             logger.info("Closed Redis connection")
 
     async def check_fixed_window(
-        self, key: str, max_requests: int, window_seconds: int, window_end: int, cost: int = 1000
+        self,
+        key_prefix: str,
+        max_requests: int,
+        window_seconds: int,
+        _legacy_window_end: Optional[int] = None,
+        *,
+        cost: int = 1000,
     ) -> RateLimitResult:
         """
         Check rate limit using fixed window algorithm.
@@ -149,10 +155,11 @@ class RedisBackend:
         ensuring thread-safe rate limiting even in distributed systems.
 
         Args:
-            key: Rate limit key (should be pre-formatted)
+            key_prefix: Rate limit key prefix ending in ':' (should be pre-formatted)
             max_requests: Maximum requests allowed (with 1000x multiplier)
             window_seconds: Size of the time window in seconds
-            window_end: Unix timestamp when this window expires (for EXPIREAT)
+            _legacy_window_end: Ignored compatibility placeholder for the former
+                client-calculated expiry argument
             cost: Cost of this request (with 1000x multiplier, default 1000 = cost of 1)
 
         Returns:
@@ -171,22 +178,21 @@ class RedisBackend:
                     result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
                         self._script_shas["fixed_window"],
                         1,  # number of keys
-                        key.encode(),  # KEYS[1]
+                        key_prefix.encode(),  # KEYS[1]
                         str(max_requests).encode(),  # ARGV[1]
                         str(window_seconds).encode(),  # ARGV[2]
-                        str(window_end).encode(),  # ARGV[3] - window end timestamp
-                        str(cost).encode(),  # ARGV[4] - cost
+                        str(cost).encode(),  # ARGV[3] - cost
                     )
                 except NoScriptError:
                     # Script not in cache, fall back to EVAL
                     logger.debug("Script not in cache, using EVAL")
                     result = await self._execute_script(
-                        "fixed_window", key, max_requests, window_seconds, window_end, cost
+                        "fixed_window", key_prefix, max_requests, window_seconds, cost
                     )
             else:
                 # No SHA available, use EVAL
                 result = await self._execute_script(
-                    "fixed_window", key, max_requests, window_seconds, window_end, cost
+                    "fixed_window", key_prefix, max_requests, window_seconds, cost
                 )
 
             # Parse result
@@ -215,10 +221,9 @@ class RedisBackend:
     async def _execute_script(
         self,
         script_name: str,
-        key: str,
+        key_prefix: str,
         max_requests: int,
         window_seconds: int,
-        window_end: int,
         cost: int = 1000,
     ) -> Any:
         """Execute Lua script with EVAL."""
@@ -232,11 +237,10 @@ class RedisBackend:
         return await self._redis.eval(  # type: ignore[no-untyped-call]
             script,
             1,  # number of keys
-            key.encode(),  # KEYS[1]
+            key_prefix.encode(),  # KEYS[1]
             str(max_requests).encode(),  # ARGV[1]
             str(window_seconds).encode(),  # ARGV[2]
-            str(window_end).encode(),  # ARGV[3] - window end timestamp
-            str(cost).encode(),  # ARGV[4]
+            str(cost).encode(),  # ARGV[3]
         )
 
     async def check_token_bucket(

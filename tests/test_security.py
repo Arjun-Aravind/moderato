@@ -723,14 +723,30 @@ class TestLuaCostGuard:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("invalid_cost", [-1000, 0, 0.5, "invalid"])
-    async def test_fixed_window_lua_rejects_invalid_cost(self, backend, invalid_cost):
-        key = f"lua-fixed-{uuid4().hex}"
-        window_end = self._future_ts(60)
+    async def test_fixed_window_lua_rejects_invalid_cost(self, backend, redis_client, invalid_cost):
+        key_prefix = f"lua-fixed-{uuid4().hex}:"
         with pytest.raises(BackendError):
-            await backend.check_fixed_window(key, 3000, 60, window_end, cost=invalid_cost)
-        # The counter must not have been created or decremented: a normal
-        # request right after must see a fresh bucket (1 used, 2 remaining).
-        result = await backend.check_fixed_window(key, 3000, 60, window_end, cost=1000)
+            await backend.check_fixed_window(key_prefix, 3000, 60, cost=invalid_cost)
+        # Validation happens before key derivation or mutation.
+        assert not [key async for key in redis_client.scan_iter(match=f"{key_prefix}*")]
+
+        # A normal request right after must see a fresh bucket (1 used,
+        # 2 remaining).
+        result = await backend.check_fixed_window(key_prefix, 3000, 60, cost=1000)
+        assert result.allowed
+        assert result.remaining == 2000
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("invalid_window", [0, -1, 0.5, "invalid"])
+    async def test_fixed_window_lua_rejects_invalid_window(self, backend, invalid_window):
+        with pytest.raises(BackendError, match="window_seconds must be a positive integer"):
+            await backend.check_fixed_window(f"lua-fixed-{uuid4().hex}:", 3000, invalid_window)
+
+    @pytest.mark.asyncio
+    async def test_fixed_window_ignores_legacy_expiry_positionally(self, backend):
+        """The old positional expiry slot must not become request cost."""
+        key_prefix = f"lua-fixed-{uuid4().hex}:"
+        result = await backend.check_fixed_window(key_prefix, 3000, 60, self._future_ts(60))
         assert result.allowed
         assert result.remaining == 2000
 

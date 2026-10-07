@@ -132,13 +132,18 @@ def percentile(sorted_values: Sequence[float], pct: float) -> float:
     return sorted_values[idx]
 
 
-def summarize(values: Sequence[float]) -> dict[str, Any]:
-    """Trial statistics: mean, sample stdev, CV, and the min/median/max spread."""
+def summarize(values: Sequence[float], count_key: str = "trials") -> dict[str, Any]:
+    """Sample statistics: mean, sample stdev, CV, and the min/median/max spread.
+
+    count_key names the count field: "trials" when each value is one
+    benchmark trial, "samples" when the values are per-key measurements
+    (memory), so machine readers do not mistake them for repeated runs.
+    """
     vals = [float(v) for v in values]
     mean = statistics.mean(vals)
     stdev = statistics.stdev(vals) if len(vals) > 1 else 0.0
     return {
-        "trials": len(vals),
+        count_key: len(vals),
         "values": [round(v, 4) for v in vals],
         "mean": round(mean, 4),
         "stdev": round(stdev, 4),
@@ -603,7 +608,7 @@ class PerformanceBenchmark:
                 "identities": identities,
                 "keys": len(keys),
                 "keys_per_identity": round(len(keys) / identities, 3),
-                "bytes_per_key": summarize(usages),
+                "bytes_per_key": summarize(usages, count_key="samples"),
                 "bytes_per_identity": round(total_bytes / identities, 1),
                 "measured_via": "MEMORY USAGE",
             }
@@ -648,7 +653,7 @@ class PerformanceBenchmark:
                 "identities": steady_identities,
                 "keys": len(keys),
                 "keys_per_identity": round(len(keys) / steady_identities, 3),
-                "bytes_per_key": summarize(usages),
+                "bytes_per_key": summarize(usages, count_key="samples"),
                 "bytes_per_identity": round(total_bytes / steady_identities, 1),
                 "measured_via": "MEMORY USAGE after two checks one window apart",
             }

@@ -20,7 +20,8 @@ theoretical optima:
   bucket per route rather than one per identity. With a single client
   identity the workload is identical either way.
 
-A raw Redis floor (one and two EVALSHA round trips per request) is measured
+A raw Redis floor (one EVALSHA round trip, and a TIME + EVALSHA pair, per
+request) is measured
 so library numbers can be read as client-bound vs Redis-bound.
 
 The competitor libraries are installed into an isolated virtualenv
@@ -411,7 +412,8 @@ def _summarize(values: Sequence[float]) -> dict[str, Any]:
 
 
 async def measure_redis_floor(redis_client: Any, *, levels: Sequence[int], trials: int) -> dict:
-    """Raw Redis cost per decision: one and two EVALSHA round trips."""
+    """Raw Redis cost per decision: one EVALSHA, and a TIME + EVALSHA pair
+    (the pre-atomic pattern this library used to pay)."""
     sha = await redis_client.script_load("return 1")
 
     async def one_roundtrip() -> None:
@@ -422,7 +424,10 @@ async def measure_redis_floor(redis_client: Any, *, levels: Sequence[int], trial
         await redis_client.evalsha(sha, 0)
 
     results = {}
-    for label, op in (("evalsha_x1", one_roundtrip), ("evalsha_x2", two_roundtrips)):
+    for label, op in (
+        ("evalsha_x1", one_roundtrip),
+        ("time_plus_evalsha", two_roundtrips),
+    ):
         rows = []
         for num_clients in levels:
             per_client = REQUESTS_PER_TRIAL // num_clients

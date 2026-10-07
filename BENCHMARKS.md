@@ -93,8 +93,8 @@ share two vCPUs.
 
 ## Results — moderato alone
 
-Raw data: `benchmarks/results/full-20261007T-postmerge5.json` (run 1) and
-`benchmarks/results/full-20261007T-postmerge6.json` (run 2). Each run is
+Raw data: `benchmarks/results/full-20261007T-lua7.json` (run 1) and
+`benchmarks/results/full-20261007T-lua8.json` (run 2). Each run is
 a complete, independent execution of the whole suite.
 
 ### Throughput (limiter only, no HTTP)
@@ -104,13 +104,12 @@ is denied.
 
 | Run | Sequential (req/s) | Concurrent (req/s) | Speedup |
 | --- | --- | --- | --- |
-| 1 | 5,784 ± 264 (CV 4.6%) | 8,195 ± 505 (CV 6.2%) | 1.42× |
-| 2 | 5,489 ± 215 (CV 3.9%) | 7,971 ± 344 (CV 4.3%) | 1.45× |
+| 1 | 5,826 ± 135 (CV 2.3%) | 8,396 ± 516 (CV 6.2%) | 1.44× |
+| 2 | 5,947 ± 139 (CV 2.3%) | 8,585 ± 348 (CV 4.0%) | 1.44× |
 
 Per-trial values are in the JSON. Sequential throughput agrees across the
-two runs to within ~6% (this sandbox is shared and noisier on the
-sequential path); concurrent throughput agrees to within ~2% (CV up to
-17% at individual concurrency levels in one run).
+two runs to within ~2%; concurrent throughput agrees to within ~2% (CV up
+to ~20% at individual concurrency levels in one run).
 
 ### Latency
 
@@ -119,43 +118,42 @@ trials:
 
 | Run | p50 | p90 | p95 | p99 | p99.9 | max |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 0.177 ms | 0.230 ms | 0.256 ms | 0.315 ms | 0.565 ms | 1.324 ms |
-| 2 | 0.173 ms | 0.207 ms | 0.222 ms | 0.274 ms | 0.512 ms | 4.051 ms |
+| 1 | 0.167 ms | 0.190 ms | 0.198 ms | 0.227 ms | 0.320 ms | 1.358 ms |
+| 2 | 0.166 ms | 0.193 ms | 0.204 ms | 0.235 ms | 0.306 ms | 0.967 ms |
 
 ### Concurrency sweep
 
 100 requests per client, 3 trials per level. Throughput plateaus around
-7,385–9,256 req/s from 5 clients onward while per-request latency grows
+7,859–9,474 req/s from 5 clients onward while per-request latency grows
 roughly linearly with concurrency. The CPU columns show why: the benchmark
 process is at ~100% of one core from 2 clients on, while the Redis server
-stays at 33–41% of a core. The single-threaded Python client saturates
+stays at 28–41% of a core. The single-threaded Python client saturates
 long before Redis does.
 
 | Clients | Run 1 req/s (CV) | Run 1 p50 / p99 | Run 1 CPU client / Redis | Run 2 req/s (CV) | Run 2 p50 / p99 | Run 2 CPU client / Redis |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 5,921 ± 4.6% | 0.16 / 0.25 ms | 83% / 28% | 6,169 ± 10.6% | 0.16 / 0.23 ms | 84% / 31% |
-| 2 | 8,481 ± 1.0% | 0.23 / 0.28 ms | 100% / 39% | 8,435 ± 4.7% | 0.22 / 0.37 ms | 100% / 36% |
-| 5 | 8,927 ± 0.1% | 0.56 / 0.62 ms | 100% / 41% | 9,022 ± 2.2% | 0.54 / 0.79 ms | 100% / 37% |
-| 10 | 8,092 ± 15.4% | 1.13 / 2.58 ms | 100% / 36% | 9,256 ± 2.1% | 1.05 / 1.63 ms | 100% / 38% |
-| 25 | 7,385 ± 14.1% | 3.05 / 7.07 ms | 100% / 35% | 8,399 ± 0.7% | 2.94 / 3.80 ms | 100% / 33% |
-| 50 | 8,211 ± 1.7% | 5.98 / 9.51 ms | 100% / 35% | 8,461 ± 0.4% | 5.87 / 7.88 ms | 100% / 34% |
-| 100 | 7,795 ± 1.3% | 12.51 / 18.35 ms | 100% / 34% | 8,093 ± 2.1% | 12.09 / 16.71 ms | 100% / 33% |
-| 200 | 7,891 ± 2.5% | 24.64 / 37.60 ms | 100% / 34% | 7,971 ± 1.0% | 24.65 / 32.84 ms | 100% / 34% |
+| 1 | 6,181 ± 8.5% | 0.15 / 0.24 ms | 84% / 28% | 5,010 ± 20.4% | 0.19 / 0.39 ms | 82% / 28% |
+| 2 | 8,693 ± 1.2% | 0.22 / 0.30 ms | 100% / 36% | 7,411 ± 19.2% | 0.25 / 0.42 ms | 100% / 28% |
+| 5 | 8,421 ± 12.3% | 0.55 / 1.02 ms | 100% / 38% | 8,874 ± 6.8% | 0.55 / 0.85 ms | 100% / 37% |
+| 10 | 9,267 ± 0.4% | 1.06 / 1.56 ms | 100% / 41% | 9,474 ± 0.5% | 1.04 / 1.23 ms | 100% / 39% |
+| 25 | 8,975 ± 5.2% | 2.68 / 4.45 ms | 99% / 38% | 9,178 ± 4.3% | 2.64 / 3.67 ms | 100% / 41% |
+| 50 | 8,511 ± 1.4% | 5.87 / 7.39 ms | 100% / 34% | 8,490 ± 2.2% | 5.84 / 8.20 ms | 100% / 35% |
+| 100 | 8,325 ± 0.8% | 11.81 / 15.97 ms | 100% / 32% | 8,098 ± 5.7% | 11.99 / 19.10 ms | 100% / 35% |
+| 200 | 7,859 ± 0.8% | 24.50 / 40.58 ms | 99% / 32% | 8,108 ± 3.4% | 24.26 / 38.16 ms | 99% / 34% |
 
 (CV is across the 3 trials at that level; CPU is % of one core.)
 
 ### Algorithm comparison
 
-1,000 sequential samples × 3 trials per algorithm. Fixed window is now
-60–75% faster than the other two: its window selection runs inside the Lua
-script (one `EVALSHA` per check), while token bucket and sliding window
-still read server time in a separate round trip before the script.
+1,000 sequential samples × 3 trials per algorithm. All three algorithms
+execute one Lua script per decision with server `TIME` inside it, and on
+this workload they cost about the same.
 
 | Algorithm | Run 1 throughput | Run 1 p50 / p99 | Run 2 throughput | Run 2 p50 / p99 |
 | --- | --- | --- | --- | --- |
-| fixed_window | 5,394 ± 298 req/s | 0.18 / 0.28 ms | 5,713 ± 250 req/s | 0.17 / 0.26 ms |
-| token_bucket | 3,103 ± 213 req/s | 0.32 / 0.58 ms | 3,346 ± 64 req/s | 0.29 / 0.45 ms |
-| sliding_window | 3,289 ± 70 req/s | 0.31 / 0.42 ms | 3,444 ± 76 req/s | 0.28 / 0.42 ms |
+| fixed_window | 5,725 ± 238 req/s | 0.17 / 0.27 ms | 6,432 ± 1,031 req/s | 0.16 / 0.25 ms |
+| token_bucket | 5,731 ± 113 req/s | 0.17 / 0.26 ms | 5,602 ± 52 req/s | 0.18 / 0.24 ms |
+| sliding_window | 5,778 ± 94 req/s | 0.17 / 0.23 ms | 5,521 ± 105 req/s | 0.18 / 0.27 ms |
 
 ### Memory per key
 
@@ -168,8 +166,8 @@ each, then every key the run created is scanned and measured:
 | Algorithm | Keys per identity | Bytes per key | Bytes per identity |
 | --- | --- | --- | --- |
 | fixed_window | 1.0 | 152.0 ± 0.0 | 152.0 |
-| token_bucket | 1.0 | 200.0 ± 0.0 | 200.0 |
-| sliding_window | 1.0 | 168.0 ± 0.0 | 168.0 |
+| token_bucket | 1.0 | 196.0 ± 6.9 | 196.0 |
+| sliding_window | 1.0 | 152.0 ± 0.0 | 152.0 |
 
 **Steady state** — 200 identities at `100/second`, checked twice one
 window apart, then every key still alive is measured:
@@ -177,24 +175,23 @@ window apart, then every key still alive is measured:
 | Algorithm | Keys per identity | Bytes per key | Bytes per identity |
 | --- | --- | --- | --- |
 | fixed_window | 1.0 | 152.0 ± 0.0 | 152.0 |
-| token_bucket | 1.0 | 200.0 ± 0.0 | 200.0 |
-| sliding_window | 2.0 | 168.0 ± 0.0 | 336.0 |
+| token_bucket | 1.0 | 184.0 ± 0.0 | 184.0 |
+| sliding_window | 2.0 | 152.0 ± 0.0 | 304.0 |
 
 Identical across both runs. The ± here is the spread across keys, not
 across trials. One key-name artifact to read past: `MEMORY USAGE` rises in
 allocator size-class increments as the key name grows, and the token
 bucket's dict-encoded hash sits on one of those boundaries. Reproduced
-directly: a
-token-bucket key whose full Redis name is 90 characters measures 184 B,
-the same key at 95 characters measures 200 B. These runs use the run ids
-`20261007T-postmerge5/6`, whose names land past that step, so every
-token-bucket key measures 200 B; the earlier committed runs
-(`full3/4`, five characters shorter) show the split directly. The
-capacity-relevant numbers are the bytes-per-identity columns: between
-window boundaries a sliding-window identity holds two keys (336 B) until
-its previous-window key expires, while the other algorithms hold one. A
-one-check measurement alone would understate sliding-window steady-state
-cost by half.
+directly: a token-bucket key whose full Redis name is 90 characters
+measures 184 B; the same key at 95 characters measures 200 B. The one-check
+token-bucket batch produces names straddling that boundary (identity index
+length changes the name length), so its mean lands between the classes;
+these runs use the run ids `20261007T-lua7/8`, whose steady-state names
+fall below the boundary. The capacity-relevant numbers are the
+bytes-per-identity columns: between window boundaries a sliding-window
+identity holds two keys (304 B in these runs) until its previous-window
+key expires, while the other algorithms hold one. A one-check measurement
+alone would understate sliding-window steady-state cost by half.
 
 ### Accuracy under load
 
@@ -226,15 +223,15 @@ sent a `window_end` that was already in the past. `EXPIREAT` then deleted
 the counter immediately and the request was admitted without being counted
 (reproduced directly against the script: 5 of 5 requests allowed with a
 limit of 50, and the key never persisted). That race is fixed as of the
-current code: the Lua script reads `TIME` and derives the window key
-atomically, so no client-side window can expire mid-decision. The aligned
-burst is retained because it keeps the accuracy check deterministic; the
-boundary race no longer exists to expose.
+current code: every algorithm's Lua script reads `TIME` and derives its
+rate-limit state atomically, so no client-side time can go stale
+mid-decision. The aligned burst is retained because it keeps the accuracy
+check deterministic; the boundary race no longer exists to expose.
 
 ### Multi-tenant
 
 100 tenants × 100 requests × 3 trials, tier mix 70/25/5
-(free/premium/enterprise): 8,116 ± 151 req/s (run 1), 7,997 ± 361 req/s (run 2) —
+(free/premium/enterprise): 8,002 ± 204 req/s (run 1), 8,211 ± 491 req/s (run 2) —
 consistent with the plain concurrency sweep.
 
 ### Default pool capacity
@@ -247,14 +244,14 @@ default pool and records both rejections and the observed peak pool usage:
 
 | Concurrent | Run 1 outcomes | Run 1 peak in use | Run 2 outcomes | Run 2 peak in use |
 | --- | --- | --- | --- | --- |
-| 25 | 1,000 ok | 5 / 50 | 1,000 ok | 6 / 50 |
-| 50 | 1,000 ok | 8 / 50 | 1,000 ok | 7 / 50 |
-| 75 | 1,000 ok | 11 / 50 | 1,000 ok | 10 / 50 |
-| 100 | 1,000 ok | 13 / 50 | 1,000 ok | 15 / 50 |
-| 200 | 1,000 ok | 14 / 50 | 1,000 ok | 16 / 50 |
+| 25 | 1,000 ok | 4 / 50 | 1,000 ok | 4 / 50 |
+| 50 | 1,000 ok | 5 / 50 | 1,000 ok | 5 / 50 |
+| 75 | 1,000 ok | 10 / 50 | 1,000 ok | 6 / 50 |
+| 100 | 1,000 ok | 14 / 50 | 1,000 ok | 7 / 50 |
+| 200 | 1,000 ok | 15 / 50 | 1,000 ok | 9 / 50 |
 
 The boundary was not tripped in either published run, and the observed
-peak never exceeded 16 of 50 connections even at 200 concurrent:
+peak never exceeded 15 of 50 connections even at 200 concurrent:
 each localhost check completes in well under a millisecond, so far fewer
 than 50 checks are ever mid-round-trip at once. The peak depends on
 round-trip time and scheduling, not on the client count, so treat it as
@@ -268,8 +265,8 @@ Applications with high true concurrency and a slow Redis should raise
 
 ## Head-to-head vs slowapi and fastapi-limiter
 
-Raw data: `benchmarks/results/compare-20261007T-cmp11.json` (run 1) and
-`benchmarks/results/compare-20261007T-cmp12.json` (run 2).
+Raw data: `benchmarks/results/compare-20261007T-cmp13.json` (run 1) and
+`benchmarks/results/compare-20261007T-cmp14.json` (run 2).
 
 **What is identical for everyone:** the same minimal FastAPI app shape
 (one `GET /` returning a small JSON body, per-IP keying, client
@@ -312,34 +309,33 @@ packages:
   with a limit of 3 per minute, 3 requests from `10.0.0.1` returned
   200/200/200 and 3 from `10.0.0.2` returned 429/429/429. With the
   single-identity workload used here the behaviour is identical either way,
-  but it is not a per-IP limiter as configured. (The committed comparison
-  JSONs' `methodology.app_shape` in `cmp11/12` predates this disclosure and
-  says "per-IP keying" — that describes the app, not fastapi-limiter's
-  shared route bucket; the harness string was corrected for future runs.)
+  but it is not a per-IP limiter as configured. (The harness's
+  `methodology.app_shape` metadata describes the app, which keys per IP;
+  fastapi-limiter's shared route bucket is the exception disclosed here.)
 - **fastapi-limiter's Redis bucket stores one sorted-set member per
   request** (pyrate-limiter's README says so), so its memory grows with
   traffic inside the window, unlike moderato's constant-size counters.
   This benchmark measures speed, not its memory.
 - **Redis commands per request** (counted with `INFO commandstats` over 200
-  requests, after warm-up): moderato 1 `EVALSHA` (the server `TIME` runs
-  inside the Lua script); slowapi 1 `EVALSHA`; fastapi-limiter 1
-  `EVALSHA`. (Commands run inside a script, such as `INCRBY`, `PTTL`, and
-  `TIME`, also appear in the counters.)
+  requests, after warm-up): moderato 1 `EVALSHA` for every algorithm (the
+  server `TIME` runs inside the Lua script); slowapi 1 `EVALSHA`;
+  fastapi-limiter 1 `EVALSHA`. (Commands run inside a script, such as
+  `INCRBY`, `PTTL`, and `TIME`, also appear in the counters.)
 
 ### Allowed path (limit 1,000,000/minute — nothing denied)
 
 | Clients | plain FastAPI | moderato | slowapi | fastapi-limiter |
 | --- | --- | --- | --- | --- |
 | **Run 1** | | | | |
-| 1 | 3,748 | 1,617 | 1,726 | 1,605 |
-| 10 | 3,908 | 1,776 | 1,790 | 1,345 |
-| 50 | 3,899 | 1,602 | 1,754 | 1,284 |
-| 100 | 3,835 | 1,424 | 1,766 | 1,405 |
+| 1 | 3,780 | 1,652 | 1,447 | 1,663 |
+| 10 | 3,774 | 1,694 | 1,740 | 1,542 |
+| 50 | 3,827 | 1,772 | 1,695 | 1,469 |
+| 100 | 3,612 | 1,614 | 1,742 | 1,367 |
 | **Run 2** | | | | |
-| 1 | 3,394 | 1,660 | 1,736 | 1,501 |
-| 10 | 3,653 | 1,753 | 1,762 | 1,409 |
-| 50 | 3,709 | 1,640 | 1,782 | 1,398 |
-| 100 | 3,576 | 1,605 | 1,798 | 1,423 |
+| 1 | 3,876 | 1,751 | 1,703 | 1,585 |
+| 10 | 3,933 | 1,836 | 1,841 | 1,189 |
+| 50 | 3,832 | 1,738 | 1,782 | 1,474 |
+| 100 | 3,790 | 1,716 | 1,724 | 1,501 |
 
 (req/s, mean of 3 trials; CVs and per-trial values are in the JSON. All
 four apps show occasional 10–20% single-trial dips on this shared sandbox.)
@@ -363,15 +359,15 @@ measured quota.
 | Clients | plain FastAPI | moderato | slowapi | fastapi-limiter |
 | --- | --- | --- | --- | --- |
 | **Run 1** | | | | |
-| 1 | 3,488 | 1,505 | 1,224 | 1,598 |
-| 10 | 3,773 | 1,646 | 1,333 | 1,463 |
-| 50 | 3,594 | 1,557 | 1,183 | 1,437 |
-| 100 | 3,504 | 1,577 | 1,208 | 1,405 |
+| 1 | 3,407 | 1,619 | 1,266 | 1,617 |
+| 10 | 3,617 | 1,799 | 1,292 | 1,553 |
+| 50 | 3,801 | 1,709 | 1,299 | 1,503 |
+| 100 | 3,781 | 1,669 | 1,221 | 1,423 |
 | **Run 2** | | | | |
-| 1 | 3,405 | 1,634 | 1,156 | 1,570 |
-| 10 | 3,538 | 1,702 | 1,219 | 1,515 |
-| 50 | 3,602 | 1,608 | 1,135 | 1,444 |
-| 100 | 3,587 | 1,578 | 1,212 | 1,448 |
+| 1 | 3,693 | 1,651 | 1,289 | 1,634 |
+| 10 | 3,699 | 1,787 | 1,338 | 1,473 |
+| 50 | 3,807 | 1,760 | 1,369 | 1,475 |
+| 100 | 3,758 | 1,687 | 1,327 | 1,422 |
 
 ### Redis floor
 
@@ -379,10 +375,10 @@ Raw Redis operations per request, no HTTP stack, same client machine:
 
 | Pattern | Run | 1 client | 10 clients | 50 clients | 100 clients |
 | --- | --- | --- | --- | --- | --- |
-| 1× EVALSHA | 1 | 9,725 | 13,333 | 13,313 | 12,185 |
-| 1× EVALSHA | 2 | 9,087 | 13,530 | 13,380 | 13,151 |
-| 2× EVALSHA (TIME + script) | 1 | 4,652 | 7,555 | 6,286 | 6,043 |
-| 2× EVALSHA (TIME + script) | 2 | 4,486 | 7,630 | 6,372 | 6,212 |
+| 1× EVALSHA | 1 | 9,773 | 12,651 | 13,216 | 12,921 |
+| 1× EVALSHA | 2 | 9,087 | 13,586 | 13,113 | 12,976 |
+| TIME + EVALSHA (the old two-call pattern) | 1 | 4,237 | 7,686 | 6,582 | 6,607 |
+| TIME + EVALSHA (the old two-call pattern) | 2 | 4,666 | 7,717 | 6,630 | 6,535 |
 
 (The 1-client numbers are the noisiest; from 10 clients on, each row is
 stable within a few percent.)
@@ -394,42 +390,44 @@ Percent difference in throughput, moderato versus the library, run 1 / run
 
 | Path | Against | 1 client | 10 clients | 50 clients | 100 clients |
 | --- | --- | --- | --- | --- | --- |
-| allowed | vs slowapi | -6% / -4% | -1% / -1% | -9% / -8% | -19% / -11% |
-| allowed | vs fastapi-limiter | +1% / +11% | +32% / +24% | +25% / +17% | +1% / +13% |
-| limited | vs slowapi | +23% / +41% | +23% / +40% | +32% / +42% | +31% / +30% |
-| limited | vs fastapi-limiter | -6% / +4% | +12% / +12% | +8% / +11% | +12% / +9% |
+| allowed | vs slowapi | +14% / +3% | -3% / -0% | +5% / -2% | -7% / -0% |
+| allowed | vs fastapi-limiter | -1% / +10% | +10% / +54% | +21% / +18% | +18% / +14% |
+| limited | vs slowapi | +28% / +28% | +39% / +34% | +31% / +29% | +37% / +27% |
+| limited | vs fastapi-limiter | +0% / +1% | +16% / +21% | +14% / +19% | +17% / +19% |
 
 ### Interpretation
 
 - **The HTTP stack dominates every library.** The plain app runs at
-  ~3,394–3,908 req/s in-process on this box; all three limiter libraries land
+  ~3,407–3,933 req/s in-process on this box; all three limiter libraries land
   in the same ~1.1–1.8k band, adding a few tenths of a millisecond per
   request. None of them is the bottleneck a deployment would feel first.
 - **Client-bound, not Redis-bound.** In the concurrency sweep the benchmark
-  process runs at 100–100% of a core while the Redis server stays at
-  33–41% of a core — the direct evidence for client-boundedness. The raw
-  Redis floor is consistent with that: a single `EVALSHA` sustains
-  9,087–13,530 ops/s on this box — above the ~8.0–8.2k req/s the
-  concurrency sweep achieves — while the two-call floor (4,486–7,630
-  ops/s), which token-bucket and sliding-window checks still pay, sits
-  well above those algorithms' observed 3.1–3.4k req/s.
-- **The ranking depends on the path.** On the allowed path moderato is
-  0.5–19% behind slowapi across levels (the gap widens at 100 clients) and
-  ahead of fastapi-limiter at every level (+1% to +32%). On the limited
-  path moderato is ahead of slowapi at every level (+23% to +42%) —
-  slowapi's rejection path is slower than its allow path in these runs —
-  and ahead of fastapi-limiter at every level except 1 client in run 1
-  (−6% there, +4% to +12% elsewhere). There is no single "moderato is
-  X% faster" number: the margins are path- and level-dependent.
-- **One round trip per decision on the default path.** moderato's
-  fixed-window check (the default algorithm) issues a single `EVALSHA` —
-  the server `TIME` executes inside the Lua script, a change made when the
-  boundary race below was fixed. Token-bucket and sliding-window checks
-  still make two sequential round trips (client `TIME`, then the script).
-  slowapi and fastapi-limiter make one (confirmed with the command counts
-  above). On the allowed path at 1 client moderato's p50 is 0.59–0.59 ms
-  against slowapi's 0.55–0.55 ms despite equal round trips, so the
-  remaining ~0.04 ms is client-side work this benchmark does not isolate.
+  process runs at 99–100% of a core while the Redis server stays at
+  28–41% of a core — the direct evidence for client-boundedness. The raw
+  Redis floor is consistent with that: a single `EVALSHA` sustains 9,087–13,586
+  ops/s on this box — above the ~8.0–8.6k req/s the concurrency sweep
+  achieves — while the two-call floor (4,237–7,717 ops/s), which no shipped
+  algorithm pays anymore, is shown for reference.
+- **The ranking depends on the path.** On the allowed path moderato and
+  slowapi are inside each other's run-to-run noise at every level (−7% to
+  +14% across the two runs) and moderato is ahead of fastapi-limiter at
+  every level except 1 client in run 1 (−1% there, +10% to +54%
+  elsewhere). On the limited path moderato is ahead of slowapi at every
+  level (+27% to +39%) — slowapi's rejection path is slower than its allow
+  path in these runs — and ahead of fastapi-limiter at every level
+  (+0% to +21%). There is no single "moderato is X% faster" number: the
+  margins are path- and level-dependent.
+- **One round trip per decision for every algorithm.** Each of moderato's
+  Lua scripts reads server `TIME` and derives its rate-limit state
+  atomically, so every check is one script call (normally a single
+  `EVALSHA`, with an `EVAL` fallback) — the same round-trip count as
+  slowapi and fastapi-limiter (confirmed with the command counts above).
+  Windows stay consistent across application instances without trusting
+  client clocks. At 1 client moderato's allowed-path p50 is 0.56–0.59 ms
+  against slowapi's 0.55–0.66 ms, and the raw floors attribute only
+  ~0.1 ms to the second call (0.214–0.236 ms per two-call decision against
+  0.102–0.110 ms per one-call), so the remaining gap is client-side work
+  around the script call, which this benchmark does not isolate.
 - **All three enforce their configured limits.** In the limited scenario
   every level allowed exactly the configured 100 per minute and 429'd the
   other 2,900 requests, in both runs (each limited trial is boundary-gated
@@ -439,8 +437,8 @@ Percent difference in throughput, moderato versus the library, run 1 / run
 
 - Single identity, single route, no network hop, no TLS, no multi-node
   Redis: this isolates library overhead but says nothing about network
-  dominated deployments, where per-check round trips (one for fixed
-  window, two for token bucket and sliding window) matter less.
+  dominated deployments, where the single Redis round trip per check
+  matters less.
 - The client, the ASGI app and Redis share two vCPUs, so the head-to-head
   numbers include contention that a deployment would not have.
 - Configurations follow each library's documented usage as shipped; none
@@ -448,6 +446,6 @@ Percent difference in throughput, moderato versus the library, run 1 / run
   configurability.
 - Both published runs are committed; rerunning on different hardware will
   produce different absolute numbers. The defensible claims are the
-  relationships (client-bound vs Redis-bound, the one-vs-two round-trip
-  split between algorithms, the
+  relationships (client-bound vs Redis-bound, the one-round-trip design
+  all algorithms share, the
   pool boundary), not the absolute req/s.

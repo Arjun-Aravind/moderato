@@ -100,28 +100,10 @@ class SlidingWindow(RateLimitAlgorithm):
               - Previous window: ratelimit:user:default:14:34
               - Weight: 0.5 (30 seconds into current window)
         """
-        current_time, redis_time_us = await self.backend.get_redis_time()
-        current_time_ms = current_time * 1000 + redis_time_us // 1000
-
-        # Calculate current window start time
-        window_start = current_time - (current_time % window_seconds)
-
-        # Calculate previous window start time
-        previous_window_start = window_start - window_seconds
-
-        # Generate keys for current and previous windows
-        # We'll append the window start timestamp to ensure uniqueness
-        current_key = f"{key}:{window_start}"
-        previous_key = f"{key}:{previous_window_start}"
-
-        # Execute sliding window Lua script
+        # The script appends each window start ("<key>:<window_start>")
+        # from Redis time.
         result = await self.backend.check_sliding_window(
-            current_key=current_key,
-            previous_key=previous_key,
-            max_requests=max_requests,
-            window_seconds=window_seconds,
-            current_time_ms=current_time_ms,
-            cost=cost,
+            f"{key}:", max_requests, window_seconds, cost=cost
         )
 
         return RateLimitResult(

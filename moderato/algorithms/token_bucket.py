@@ -84,16 +84,11 @@ class TokenBucket(RateLimitAlgorithm):
         # Preserve fractional refill rates so limits such as 1/hour can recover.
         refill_rate_per_second = max_requests / window_seconds
 
-        redis_time_seconds, redis_time_us = await self.backend.get_redis_time()
-        current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
-
-        # Execute token bucket Lua script
         result = await self.backend.check_token_bucket(
             key=key,
             max_tokens=max_requests,
             refill_rate_per_second=refill_rate_per_second,
             window_seconds=window_seconds,
-            current_time_ms=current_time_ms,
             cost=cost,
         )
 

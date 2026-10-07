@@ -132,12 +132,20 @@ class TestMultiTenant:
         """Test concurrent requests from multiple tenants."""
         limiter = clean_limiter
 
+        # A fixed-window boundary mid-test resets every counter and admits
+        # extra requests. Use an hour window and, near its end, wait on the
+        # Redis clock for the next one so the run never straddles a boundary.
+        now, _ = await limiter.backend.get_redis_time()
+        runway = 3600 - now % 3600
+        if runway < 30:
+            await asyncio.sleep(runway + 0.05)
+
         async def make_tenant_requests(tenant_id: str, tenant_type: str, count: int):
             """Helper to make requests for a tenant."""
             results = []
             for _ in range(count):
                 try:
-                    await limiter.check(key=tenant_id, rate="50/minute", tenant_type=tenant_type)
+                    await limiter.check(key=tenant_id, rate="50/hour", tenant_type=tenant_type)
                     results.append(True)
                 except RateLimitExceeded:
                     results.append(False)

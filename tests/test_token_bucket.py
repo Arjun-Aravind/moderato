@@ -3,6 +3,8 @@ Tests for Token Bucket rate limiting algorithm.
 """
 
 import asyncio
+import math
+from uuid import uuid4
 
 import pytest
 
@@ -13,6 +15,31 @@ from tests.conftest import sleep_past_window_boundary
 @pytest.mark.asyncio
 class TestTokenBucket:
     """Test suite for Token Bucket algorithm."""
+
+    async def test_time_is_read_inside_lua(self, clean_limiter, monkeypatch):
+        async def unexpected_time_call():
+            raise AssertionError("token-bucket check must get time inside Lua")
+
+        monkeypatch.setattr(clean_limiter.backend, "get_redis_time", unexpected_time_call)
+
+        assert await clean_limiter.check(
+            key=f"lua-time-{uuid4().hex}", rate="1/minute", algorithm="token_bucket"
+        )
+
+    async def test_denied_reset_at_not_before_retry_after(self, clean_limiter):
+        key = f"tb-reset-{uuid4().hex}"
+        await clean_limiter.check(key=key, rate="1/hour", algorithm="token_bucket")
+        # At 1/hour no token accrues in this gap, so the bucket's refill clock
+        # stays at the first check while Retry-After counts from the second.
+        await asyncio.sleep(1.1)
+        before_ms = await clean_limiter.backend.get_redis_time_ms()
+
+        result = await clean_limiter.check_with_info(
+            key=key, rate="1/hour", algorithm="token_bucket"
+        )
+
+        assert not result.allowed
+        assert result.reset_at >= math.ceil(before_ms / 1000 + result.retry_after)
 
     async def test_basic_token_bucket(self, clean_limiter):
         """Test basic token bucket rate limiting."""

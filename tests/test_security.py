@@ -738,9 +738,13 @@ class TestLuaCostGuard:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("invalid_window", [0, -1, 0.5, "invalid"])
-    async def test_fixed_window_lua_rejects_invalid_window(self, backend, invalid_window):
+    async def test_fixed_window_lua_rejects_invalid_window(
+        self, backend, redis_client, invalid_window
+    ):
+        key_prefix = f"lua-fixed-{uuid4().hex}:"
         with pytest.raises(BackendError, match="window_seconds must be a positive integer"):
-            await backend.check_fixed_window(f"lua-fixed-{uuid4().hex}:", 3000, invalid_window)
+            await backend.check_fixed_window(key_prefix, 3000, invalid_window)
+        assert not [key async for key in redis_client.scan_iter(match=f"{key_prefix}*")]
 
     @pytest.mark.asyncio
     async def test_fixed_window_ignores_legacy_expiry_positionally(self, backend):

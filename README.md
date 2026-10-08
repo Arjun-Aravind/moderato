@@ -101,6 +101,15 @@ This gives you:
 
 Moderato provides three tested algorithms. Choose based on the traffic behavior you want:
 
+All three algorithms charge only **admitted requests**. For example, under a
+`10/minute` limit, after using 8 units, a cost-3 request is rejected without
+consuming quota; a subsequent cost-2 request can still be admitted. Admission
+charges the quota even if the protected application operation later fails.
+
+This is a planned **0.5.0 behavior change** for fixed windows, which previously
+charged rejected attempts. Existing counters retain their recorded usage until
+expiry or an explicit reset; upgrading does not undo earlier charges.
+
 ### Fixed Window (Default)
 
 **Best for:** Simple rate limiting, strict per-window limits, lower memory usage
@@ -113,7 +122,7 @@ async def endpoint(request: Request):
 
 **How it works:**
 - Time divided into fixed windows (e.g., 14:35:00 - 14:36:00)
-- Counter increments per request
+- Counter increments by cost only when the request fits the remaining quota
 - Resets when window expires
 
 **Pros:** Simple, low memory, strict limits  
@@ -132,10 +141,18 @@ async def endpoint(request: Request):
 **How it works:**
 - Bucket holds tokens (capacity = 100)
 - Tokens refill continuously (~1.67/second for 100/minute)
-- Each request consumes tokens
+- Each admitted request consumes tokens; denied polling preserves refill progress
+- Full buckets discard excess idle credit, including fractional credit
 
 **Pros:** Continuous refill and configurable burst capacity
 **Cons:** State uses a Redis hash and allows bursts up to bucket capacity
+
+For the planned 0.5.0 upgrade, token hashes gain a `refill_units` field. Existing
+hashes are accepted, but do not mix old and new token scripts on the same keys:
+stop old writers before upgrading. Using a separate `key_prefix` isolates a new
+deployment but starts fresh quotas. Rolling back also requires isolated keys or
+waiting for the new hashes to expire before old writers resume. Previously lost
+refill credit is not restored.
 
 ### Sliding Window
 

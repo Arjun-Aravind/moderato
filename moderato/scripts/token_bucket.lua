@@ -41,30 +41,35 @@ local time = redis.call('TIME')
 local current_time_ms = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 
 -- Get current bucket state
-local bucket = redis.call('HMGET', key, 'tokens', 'last_refill_ms')
+local bucket = redis.call('HMGET', key, 'tokens', 'last_refill_ms', 'refill_units')
 local current_tokens = tonumber(bucket[1]) or max_tokens  -- Start with full bucket
 local last_refill_ms = tonumber(bucket[2]) or current_time_ms
+-- Whole scaled units already credited since last_refill_ms. Keeping a
+-- common origin avoids discarding a fractional unit on every check.
+-- Existing hashes have no refill_units field and start at zero.
+local refill_units = tonumber(bucket[3]) or 0
 
 -- Calculate time elapsed since last refill (in milliseconds)
 local time_elapsed_ms = math.max(0, current_time_ms - last_refill_ms)
 
--- Calculate tokens to add based on elapsed time
--- tokens_to_add = refill_rate_per_second * (time_elapsed_ms / 1000)
--- Use integer math: tokens_to_add = (refill_rate_per_second * time_elapsed_ms) / 1000
-local tokens_to_add = 0
+local accrued = 0
 if refill_rate_per_second > 0 then
-    tokens_to_add = math.floor((refill_rate_per_second * time_elapsed_ms) / 1000)
+    accrued = (refill_rate_per_second * time_elapsed_ms) / 1000
 end
+local accrued_units = math.floor(accrued)
+local tokens_to_add = math.max(0, accrued_units - refill_units)
+refill_units = math.max(refill_units, accrued_units)
+local fractional_credit = accrued - accrued_units
 
 -- Add tokens to bucket, but don't exceed max capacity
 local new_tokens = math.min(max_tokens, current_tokens + tokens_to_add)
 
--- Advance the refill timestamp only when tokens actually accrued.
--- Resetting it on every denied check floors away fractional progress,
--- so low rates (e.g. 1/hour) would never accumulate while clients poll.
-local effective_refill_ms = current_time_ms
-if tokens_to_add <= 0 then
-    effective_refill_ms = last_refill_ms
+-- Saturation discards all idle credit, including fractional credit. Start
+-- the next refill period at this check before consuming from a full bucket.
+if new_tokens == max_tokens then
+    last_refill_ms = current_time_ms
+    refill_units = 0
+    fractional_credit = 0
 end
 
 -- Determine if request is allowed
@@ -78,8 +83,9 @@ if new_tokens >= cost then
     new_tokens = new_tokens - cost
     remaining = new_tokens
 
-    -- Update bucket state with millisecond timestamp
-    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', effective_refill_ms)
+    -- Update bucket state without losing fractional refill progress
+    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', last_refill_ms,
+        'refill_units', refill_units)
 
     -- Set expiry to prevent memory leaks
     -- Use window_seconds * 2 as a safe TTL (bucket expires after inactivity)
@@ -91,7 +97,7 @@ else
     remaining = 0
 
     -- Calculate how long until enough tokens are available
-    local tokens_needed = cost - new_tokens
+    local tokens_needed = cost - new_tokens - fractional_credit
     if refill_rate_per_second > 0 then
         -- time_needed_ms = (tokens_needed / refill_rate_per_second) * 1000
         -- Integer math: time_needed_ms = (tokens_needed * 1000) / refill_rate_per_second
@@ -102,7 +108,8 @@ else
     end
 
     -- Update bucket state with refilled tokens (even though request denied)
-    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', effective_refill_ms)
+    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', last_refill_ms,
+        'refill_units', refill_units)
 
     -- Set expiry
     local ttl = window_seconds * 2 + 60
@@ -115,9 +122,10 @@ end
 -- reset_at is when the bucket is full again, based on Redis TIME.
 local full_refill_after_ms = 0
 if new_tokens < max_tokens and refill_rate_per_second > 0 then
-    full_refill_after_ms = math.ceil(((max_tokens - new_tokens) * 1000) / refill_rate_per_second)
+    full_refill_after_ms = math.ceil(
+        ((max_tokens - new_tokens - fractional_credit) * 1000) / refill_rate_per_second)
 end
-local reset_at = math.ceil((effective_refill_ms + full_refill_after_ms) / 1000)
+local reset_at = math.ceil((current_time_ms + full_refill_after_ms) / 1000)
 if allowed == 0 then
     -- A denied caller must not be told to come back before Retry-After,
     -- which clients see rounded up to at least one second from now.

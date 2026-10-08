@@ -178,7 +178,7 @@ async def endpoint(request: Request):
 |---------|--------------|--------------|----------------|
 | Simplicity | High | Medium | Medium |
 | Boundary Bursts | Possible (2x) | None | None |
-| Redis data | String counter | Hash with tokens and timestamp | Two string counters |
+| Redis data | String counter | Hash with tokens, refill timestamp, and credited refill units | Two string counters |
 | Traffic behavior | Resets at boundaries | Continuous refill | Weighted window transition |
 | Accuracy model | Exact fixed window | Exact token bucket state | Approximate rolling window |
 

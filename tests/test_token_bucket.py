@@ -166,10 +166,10 @@ class TestTokenBucket:
         assert usage["remaining"] == 1
 
     @pytest.mark.parametrize("window_seconds", [1, 3, 7, 60, 3600, 86400])
-    async def test_refill_matches_rational_model(self, token_clock, window_seconds):
-        check, _, _ = token_clock
+    @pytest.mark.parametrize("capacity", [11000, 9007199254000])
+    async def test_refill_matches_rational_model(self, token_clock, window_seconds, capacity):
+        check, _, base_ms = token_clock
         rng = random.Random(40406392)
-        capacity = 11000
         balance = Fraction(capacity)
         elapsed_ms = 0
         for _ in range(200):
@@ -188,6 +188,12 @@ class TestTokenBucket:
                 balance,
                 actual,
             )
+            if not allowed:
+                expected_retry = math.ceil((cost - balance) * window_seconds * 1000 / capacity)
+                assert actual[2] == expected_retry
+            else:
+                full_refill_ms = math.ceil((capacity - balance) * window_seconds * 1000 / capacity)
+                assert actual[3] == math.ceil((base_ms + elapsed_ms + full_refill_ms) / 1000)
 
     async def test_time_is_read_inside_lua(self, clean_limiter, monkeypatch):
         async def unexpected_time_call():

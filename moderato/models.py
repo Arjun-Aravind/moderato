@@ -21,7 +21,8 @@ class CheckResult:
         limit: Maximum requests allowed in the window
         remaining: Whole unit-cost requests that fit the remaining capacity,
             rounded down, including on denial. A smaller cost may still fit
-        retry_after: Whole seconds to wait before retrying (0 if allowed)
+        retry_after: Whole seconds to wait before retrying (0 if allowed),
+            or None for a permanent denial because cost exceeds capacity
         reset_at: Unix timestamp, from the Redis-backed decision, for when
             the request may proceed again. For allowed fixed and sliding
             window decisions this is the current window's end; for allowed
@@ -42,7 +43,7 @@ class CheckResult:
     allowed: bool
     limit: int
     remaining: int
-    retry_after: int  # seconds (0 if allowed)
+    retry_after: Optional[int]  # seconds; 0 if allowed, None if cost can never fit
     window_seconds: int
     reset_at: Optional[int] = None  # Unix timestamp in seconds
 

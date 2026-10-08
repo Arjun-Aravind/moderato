@@ -14,11 +14,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Token bucket hashes gain `refill_units`, recording whole scaled units credited since their refill origin. `RateLimiter` now uses `:bucket:v2` keys, automatically isolating the new schema from old writers and rollback. Upgrade starts fresh quotas; during rolling overlap, old and new workers enforce independent quotas and combined traffic can exceed a single quota. Rollback resumes legacy quota state if retained. Strict quota continuity requires a coordinated cutover. Direct backend callers must version their supplied keys themselves. Explicit token resets include recognized legacy and v2 keys.
 - Denials now report actual remaining capacity, rounded down to whole unit-cost requests, across all algorithms and HTTP headers. A smaller request may still fit. Sliding `get_usage()` rounds remaining capacity down before converting to display units, so displayed usage and remaining need not sum to the limit.
 - Sliding window retry hints now follow the whole-second, permille-rounded two-bucket estimate through rollover, rather than assuming all current usage disappears at the next boundary. For costs within capacity, denied token/sliding `reset_at` is a conservative retry timestamp for that cost, not full-quota recovery. Allowed reset metadata is unchanged. Retry hints assume no intervening admissions and retained Redis state; they are not reservations or exact rolling-window guarantees.
+- Valid per-request costs above policy capacity are permanent denials across all algorithms: `CheckResult` and `RateLimitExceeded` report `retry_after=None` and `reset_at=None`. HTTP integrations return 422 with no retry/reset headers; temporary denials still return 429. Custom exception handlers must use `exc.status_code` and omit `Retry-After` when `exc.retry_after` is `None`.
+- Rates are limited to 1–9,007,199,254 requests per supported period to keep scaled/weighted arithmetic within Lua's exact integer range. Invalid policies now raise `RateLimitConfigError` before Redis access in both checks and usage snapshots, and at decorator creation. `parse_rate()` continues to raise `ValueError`.
+- Lua/backend inputs now require integer scaled capacities of 1–9,007,199,254,000 and integer windows of 1–86,400 seconds. Token refill rates must be finite and between capacity/86,400 and 9,007,199,254,000 scaled units/second (full refill within a day). Independent custom refill rates raise `BackendError` if cumulative accrual exceeds the exact numeric range. Backend permanent denials use `retry_after=-1` and `reset_at=None`.
+
+### Added
+
+- Decorator `cost` accepts a static positive integer as well as a per-request callback. Invalid static costs, including costs above policy capacity, raise `RateLimitConfigError` at decorator creation; callbacks are evaluated only per request.
 
 ### Fixed
 
 - Token bucket recovery timestamps and retry delays account for fractional progress and the actual depletion time of a full bucket.
 - Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
+- Public token policies rebase whole-window refill progress without losing fractional credit, avoiding unbounded credited-unit counters in continuously busy buckets. Quotient/remainder arithmetic and decimal integer serialization prevent high-capacity refill rounding and scientific-notation usage parsing failures.
+- Public token retry/full-refill deadlines use the same integer credit calculation as admission, avoiding a spurious extra millisecond from floating-point division/ceiling. Slow custom backend refill rates now retain state for twice the longer of the configured window or full-refill duration, plus 60 seconds, rather than expiring before full recovery.
 
 ## v0.4.0 (2026-10-07)
 

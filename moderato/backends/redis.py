@@ -22,8 +22,8 @@ class RateLimitResult(NamedTuple):
 
     allowed: bool  # Whether the request is allowed
     remaining: int  # Number of requests remaining (with multiplier)
-    retry_after: int  # Milliseconds until rate limit resets
-    reset_at: int  # Unix timestamp in seconds, calculated by Redis/Lua
+    retry_after: int  # Milliseconds until recovery; -1 if cost exceeds capacity
+    reset_at: Optional[int]  # Unix timestamp; None for permanent denials
 
 
 class RedisBackend:
@@ -204,7 +204,7 @@ class RedisBackend:
             allowed = bool(int(result[0]))
             remaining = int(result[1])
             retry_after_ms = int(result[2])
-            reset_at = int(result[3])
+            reset_at = int(result[3]) if retry_after_ms != -1 else None
 
             return RateLimitResult(
                 allowed=allowed,
@@ -310,7 +310,7 @@ class RedisBackend:
             allowed = bool(int(result[0]))
             remaining = int(result[1])
             retry_after_ms = int(result[2])
-            reset_at = int(result[3])
+            reset_at = int(result[3]) if retry_after_ms != -1 else None
 
             return RateLimitResult(
                 allowed=allowed,
@@ -449,7 +449,7 @@ class RedisBackend:
             allowed = bool(int(result[0]))
             remaining = int(result[1])
             retry_after_ms = int(result[2])
-            reset_at = int(result[3])
+            reset_at = int(result[3]) if retry_after_ms != -1 else None
 
             return RateLimitResult(
                 allowed=allowed,

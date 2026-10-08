@@ -32,12 +32,15 @@ if cost_arg then
     cost = tonumber(cost_arg)
 end
 
-if window_seconds == nil or window_seconds <= 0 or window_seconds ~= math.floor(window_seconds) then
-    return redis.error_reply("window_seconds must be a positive integer")
+if max_requests == nil or max_requests <= 0 or max_requests > 9007199254000 or max_requests ~= math.floor(max_requests) then
+    return redis.error_reply("capacity must be a positive integer no greater than 9007199254000")
+end
+if window_seconds == nil or window_seconds <= 0 or window_seconds > 86400 or window_seconds ~= math.floor(window_seconds) then
+    return redis.error_reply("window_seconds must be a positive integer no greater than 86400")
 end
 
 -- Defense in depth: request cost must consume capacity
-if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
+if cost == nil or cost <= 0 or cost == math.huge or cost ~= math.floor(cost) then
     return redis.error_reply("cost must be a positive integer")
 end
 
@@ -72,6 +75,10 @@ end
 -- weighted_count = current_count + (previous_count * weight) / 1000
 local weighted_previous = math.floor((previous_count * prev_weight_fp) / 1000)
 local weighted_count = current_count + weighted_previous
+-- A cost above capacity cannot recover through time or decay.
+if cost > max_requests then
+    return {0, math.max(0, max_requests - weighted_count), -1, 0}
+end
 
 -- Check if request is allowed (before adding cost)
 local allowed = 0
@@ -96,36 +103,31 @@ else
     allowed = 0
     remaining = math.max(0, max_requests - weighted_count)
 
-    if cost <= max_requests then
-        -- Without intervening admissions the estimate is monotone. Search
-        -- whole Redis seconds using the same permille rounding as admission.
-        -- At rollover current becomes previous; it does not disappear.
-        -- By the second boundary both sampled counts have aged out.
-        local low = current_timestamp + 1
-        local high = window_start + window_seconds * 2
-        while low < high do
-            local candidate = math.floor((low + high) / 2)
-            local candidate_count
-            if candidate < window_start + window_seconds then
-                local weight = math.floor(
-                    ((window_start + window_seconds - candidate) * 1000) / window_seconds)
-                candidate_count = current_count + math.floor((previous_count * weight) / 1000)
-            else
-                local weight = math.floor(
-                    ((window_start + window_seconds * 2 - candidate) * 1000) / window_seconds)
-                candidate_count = math.floor((current_count * weight) / 1000)
-            end
-            if candidate_count + cost <= max_requests then
-                high = candidate
-            else
-                low = candidate + 1
-            end
+    -- Without intervening admissions the estimate is monotone. Search
+    -- whole Redis seconds using the same permille rounding as admission.
+    -- At rollover current becomes previous; it does not disappear.
+    -- By the second boundary both sampled counts have aged out.
+    local low = current_timestamp + 1
+    local high = window_start + window_seconds * 2
+    while low < high do
+        local candidate = math.floor((low + high) / 2)
+        local candidate_count
+        if candidate < window_start + window_seconds then
+            local weight = math.floor(
+                ((window_start + window_seconds - candidate) * 1000) / window_seconds)
+            candidate_count = current_count + math.floor((previous_count * weight) / 1000)
+        else
+            local weight = math.floor(
+                ((window_start + window_seconds * 2 - candidate) * 1000) / window_seconds)
+            candidate_count = math.floor((current_count * weight) / 1000)
         end
-        retry_after_ms = low * 1000 - current_timestamp_ms
-    else
-        -- Permanent oversized-cost denial is handled in the bounds change.
-        retry_after_ms = remaining_in_window * 1000
+        if candidate_count + cost <= max_requests then
+            high = candidate
+        else
+            low = candidate + 1
+        end
     end
+    retry_after_ms = low * 1000 - current_timestamp_ms
 end
 
 -- Return results

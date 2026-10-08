@@ -26,13 +26,25 @@ if cost_arg then
     cost = tonumber(cost_arg)
 end
 
-if window_seconds == nil or window_seconds <= 0 or window_seconds ~= math.floor(window_seconds) then
-    return redis.error_reply("window_seconds must be a positive integer")
+if max_tokens == nil or max_tokens <= 0 or max_tokens > 9007199254000 or max_tokens ~= math.floor(max_tokens) then
+    return redis.error_reply("capacity must be a positive integer no greater than 9007199254000")
+end
+if window_seconds == nil or window_seconds <= 0 or window_seconds > 86400 or window_seconds ~= math.floor(window_seconds) then
+    return redis.error_reply("window_seconds must be a positive integer no greater than 86400")
+end
+if refill_rate_per_second == nil or refill_rate_per_second ~= refill_rate_per_second or refill_rate_per_second < max_tokens / 86400 or refill_rate_per_second > 9007199254000 then
+    return redis.error_reply("refill rate must be finite and between capacity/86400 and 9007199254000")
 end
 
 -- Defense in depth: request cost must consume capacity
-if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
+if cost == nil or cost <= 0 or cost == math.huge or cost ~= math.floor(cost) then
     return redis.error_reply("cost must be a positive integer")
+end
+
+-- Never expire a custom-rate bucket before it could refill completely.
+local ttl = window_seconds * 2 + 60
+if refill_rate_per_second ~= max_tokens / window_seconds then
+    ttl = math.max(ttl, math.ceil(max_tokens / refill_rate_per_second) * 2 + 60)
 end
 
 -- Reading TIME here instead of in the client saves a round trip per check
@@ -53,13 +65,60 @@ local refill_units = tonumber(bucket[3]) or 0
 local time_elapsed_ms = math.max(0, current_time_ms - last_refill_ms)
 
 local accrued = 0
-if refill_rate_per_second > 0 then
+local fractional_credit = 0
+local accrued_units
+local time_until_refill
+if refill_rate_per_second == max_tokens / window_seconds then
+    -- Public policies refill exactly one capacity per window. Move past
+    -- whole windows without discarding fractional progress, so a busy
+    -- bucket's origin and credited-unit counter cannot grow indefinitely.
+    local window_ms = window_seconds * 1000
+    local whole_windows = math.floor(time_elapsed_ms / window_ms)
+    if whole_windows > 0 then
+        last_refill_ms = last_refill_ms + whole_windows * window_ms
+        refill_units = refill_units - whole_windows * max_tokens
+        time_elapsed_ms = time_elapsed_ms % window_ms
+    end
+    -- Quotient/remainder decomposition keeps each integer product below
+    -- 2^53, even at the maximum capacity and a day-long window.
+    local units_per_ms = math.floor(max_tokens / window_ms)
+    local remainder = max_tokens % window_ms
+    local partial_product = remainder * time_elapsed_ms
+    accrued_units = units_per_ms * time_elapsed_ms + math.floor(partial_product / window_ms)
+    -- Use the same integer credit calculation for deadlines. Floating-point
+    -- division followed by ceil can add a spurious millisecond at a boundary.
+    -- One window always replenishes the needed units; at most 27 iterations.
+    time_until_refill = function(units_needed)
+        local low = 0
+        local high = window_ms
+        while low < high do
+            local delay = math.floor((low + high) / 2)
+            local elapsed = time_elapsed_ms + delay
+            local phase = elapsed % window_ms
+            local credit = math.floor(elapsed / window_ms) * max_tokens
+                + units_per_ms * phase + math.floor((remainder * phase) / window_ms)
+            if credit - accrued_units >= units_needed then
+                high = delay
+            else
+                low = delay + 1
+            end
+        end
+        return low
+    end
+else
+    -- Direct backend callers may supply an independent refill rate.
     accrued = (refill_rate_per_second * time_elapsed_ms) / 1000
+    if accrued > 9007199254740991 then
+        return redis.error_reply("custom refill accrual exceeds the exact numeric range")
+    end
+    accrued_units = math.floor(accrued)
+    fractional_credit = accrued - accrued_units
+    time_until_refill = function(units_needed)
+        return math.ceil(((units_needed - fractional_credit) * 1000) / refill_rate_per_second)
+    end
 end
-local accrued_units = math.floor(accrued)
 local tokens_to_add = math.max(0, accrued_units - refill_units)
 refill_units = math.max(refill_units, accrued_units)
-local fractional_credit = accrued - accrued_units
 
 -- Add tokens to bucket, but don't exceed max capacity
 local new_tokens = math.min(max_tokens, current_tokens + tokens_to_add)
@@ -70,6 +129,12 @@ if new_tokens == max_tokens then
     last_refill_ms = current_time_ms
     refill_units = 0
     fractional_credit = 0
+    time_elapsed_ms = 0
+    accrued_units = 0
+end
+
+if cost > max_tokens then
+    return {0, new_tokens, -1, 0}
 end
 
 -- Determine if request is allowed
@@ -84,12 +149,11 @@ if new_tokens >= cost then
     remaining = new_tokens
 
     -- Update bucket state without losing fractional refill progress
-    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', last_refill_ms,
-        'refill_units', refill_units)
+    redis.call('HMSET', key, 'tokens', string.format('%.0f', new_tokens),
+        'last_refill_ms', string.format('%.0f', last_refill_ms),
+        'refill_units', string.format('%.0f', refill_units))
 
-    -- Set expiry to prevent memory leaks
-    -- Use window_seconds * 2 as a safe TTL (bucket expires after inactivity)
-    local ttl = window_seconds * 2 + 60  -- Add 60s buffer
+    -- Set expiry to prevent memory leaks after inactivity.
     redis.call('EXPIRE', key, ttl)
 else
     -- Request is denied - not enough tokens
@@ -97,36 +161,26 @@ else
     remaining = new_tokens
 
     -- Calculate how long until enough tokens are available
-    local tokens_needed = cost - new_tokens - fractional_credit
-    if refill_rate_per_second > 0 then
-        -- time_needed_ms = (tokens_needed / refill_rate_per_second) * 1000
-        -- Integer math: time_needed_ms = (tokens_needed * 1000) / refill_rate_per_second
-        retry_after_ms = math.ceil((tokens_needed * 1000) / refill_rate_per_second)
-    else
-        -- If refill rate is 0 (shouldn't happen), wait for full window
-        retry_after_ms = window_seconds * 1000
-    end
+    retry_after_ms = time_until_refill(cost - new_tokens)
 
     -- Update bucket state with refilled tokens (even though request denied)
-    redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill_ms', last_refill_ms,
-        'refill_units', refill_units)
+    redis.call('HMSET', key, 'tokens', string.format('%.0f', new_tokens),
+        'last_refill_ms', string.format('%.0f', last_refill_ms),
+        'refill_units', string.format('%.0f', refill_units))
 
     -- Set expiry
-    local ttl = window_seconds * 2 + 60
     redis.call('EXPIRE', key, ttl)
 end
 
 -- Return results
 -- allowed: 1 if request should proceed, 0 if rate limited
 -- remaining: number of tokens remaining in bucket (with multiplier)
--- reset_at is when the bucket is full again, based on Redis TIME.
-local full_refill_after_ms = 0
-if new_tokens < max_tokens and refill_rate_per_second > 0 then
-    full_refill_after_ms = math.ceil(
-        ((max_tokens - new_tokens - fractional_credit) * 1000) / refill_rate_per_second)
-end
-local reset_at = math.ceil((current_time_ms + full_refill_after_ms) / 1000)
-if allowed == 0 then
+-- Allowed reset_at describes full refill; a denial describes this cost.
+local reset_at
+if allowed == 1 then
+    local full_refill_after_ms = time_until_refill(max_tokens - new_tokens)
+    reset_at = math.ceil((current_time_ms + full_refill_after_ms) / 1000)
+else
     -- A denied caller must not be told to come back before Retry-After,
     -- which clients see rounded up to at least one second from now.
     local retry_after_s = math.max(1, math.ceil(retry_after_ms / 1000))

@@ -3,14 +3,15 @@ Decorator implementations for rate limiting.
 """
 
 import functools
+import json
 import logging
 from inspect import iscoroutinefunction
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar, Union
 
 import anyio
 from typing_extensions import ParamSpec
 
-from .exceptions import RateLimitCallbackError, RateLimitExceeded
+from .exceptions import RateLimitCallbackError, RateLimitConfigError, RateLimitExceeded
 from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ def create_limit_decorator(
     key_func: Optional[KeyFunc] = None,
     tenant_func: Optional[TenantFunc] = None,
     algorithm: Optional[str] = None,
-    cost_func: Optional[CostFunc] = None,
+    cost_func: Optional[Union[int, CostFunc]] = None,
     trust_proxy_headers: bool = False,
     scope: Optional[str] = None,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
@@ -46,7 +47,7 @@ def create_limit_decorator(
         key_func: Optional function to extract rate limit key from request
         tenant_func: Optional function to extract tenant type from request
         algorithm: Algorithm to use for rate limiting
-        cost_func: Optional function to calculate request cost
+        cost_func: Positive integer cost or function calculating it per request
         trust_proxy_headers: Whether to trust forwarded client IP headers
         scope: Shared bucket name. Defaults to the request method and route.
 
@@ -64,6 +65,16 @@ def create_limit_decorator(
         >>> async def my_endpoint(request):
         >>>     return {"status": "ok"}
     """
+
+    try:
+        capacity, _ = parse_rate(rate)
+    except ValueError as e:
+        raise RateLimitConfigError(f"Invalid rate format: {e}") from e
+    if cost_func is not None and not callable(cost_func):
+        if not isinstance(cost_func, int) or isinstance(cost_func, bool) or cost_func < 1:
+            raise RateLimitConfigError("cost must be a positive integer")
+        if cost_func > capacity:
+            raise RateLimitConfigError("Static cost must not exceed the rate limit capacity")
 
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
         """The actual decorator."""
@@ -162,7 +173,7 @@ async def _check_rate_limit(
     key_func: Optional[KeyFunc],
     tenant_func: Optional[TenantFunc],
     algorithm: Optional[str],
-    cost_func: Optional[CostFunc],
+    cost_func: Optional[Union[int, CostFunc]],
     scope: str,
     trust_proxy_headers: bool = False,
 ) -> None:
@@ -203,12 +214,14 @@ async def _check_rate_limit(
 
     # Calculate cost
     cost = 1
-    if cost_func:
+    if callable(cost_func):
         try:
             cost = cost_func(request)
         except Exception as e:
             logger.exception("Rate limit cost callback failed")
             raise RateLimitCallbackError("cost") from e
+    elif cost_func is not None:
+        cost = cost_func
 
     # Perform rate limit check using check_with_info to get usage in single call
     try:
@@ -245,8 +258,9 @@ async def _check_rate_limit(
             request.state.rate_limit_headers = {
                 "X-RateLimit-Limit": str(parse_rate(rate)[0]),
                 "X-RateLimit-Remaining": str(e.remaining),
-                "Retry-After": str(e.retry_after),
             }
+            if e.retry_after is not None:
+                request.state.rate_limit_headers["Retry-After"] = str(e.retry_after)
             if e.reset_at is not None:
                 request.state.rate_limit_headers["X-RateLimit-Reset"] = str(e.reset_at)
 
@@ -415,27 +429,30 @@ class RateLimitMiddleware:
         remaining = denial.remaining
         reset_at = denial.reset_at
 
-        # Send 429 response
+        # Never advertise recovery for a cost that cannot fit the policy.
         headers = [
             (b"content-type", b"application/json"),
-            (b"retry-after", str(retry_after).encode()),
             (b"x-ratelimit-limit", str(parse_rate(self.default_rate)[0]).encode()),
             (b"x-ratelimit-remaining", str(remaining).encode()),
         ]
+        if retry_after is not None:
+            headers.append((b"retry-after", str(retry_after).encode()))
         if reset_at is not None:
             headers.append((b"x-ratelimit-reset", str(reset_at).encode()))
 
         await send(
             {
                 "type": "http.response.start",
-                "status": 429,
+                "status": 422 if retry_after is None else 429,
                 "headers": headers,
             }
         )
         await send(
             {
                 "type": "http.response.body",
-                "body": f'{{"error": "Rate limit exceeded", "retry_after": {retry_after}}}'.encode(),  # noqa: E501
+                "body": json.dumps(
+                    {"error": "Rate limit exceeded", "retry_after": retry_after}
+                ).encode(),
             }
         )
         return

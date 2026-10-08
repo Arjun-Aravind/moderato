@@ -113,7 +113,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
             from starlette.responses import JSONResponse
 
             return JSONResponse(
-                status_code=429,
+                status_code=exc.status_code,
                 content={
                     "error": "Rate limit exceeded",
                     "message": str(exc),

@@ -359,27 +359,60 @@ async def get_data(request: Request):
 @app.post("/api/ml/inference")
 @limiter.limit(
     "100/minute",
-    cost=lambda req: 10  # This endpoint counts as 10 regular requests
+    cost=10  # This endpoint counts as 10 regular requests
 )
 async def ml_inference(request: Request):
     return {"prediction": "..."}
 ```
 
+For planned 0.5.0, `cost` accepts a static integer or a request callback.
+Costs must be positive integers (not booleans or floats). A static cost above
+the policy capacity raises `RateLimitConfigError` when creating the decorator,
+before Redis is contacted. Callbacks still run per request: a valid positive
+cost above capacity is a **permanent denial**, not a configuration failure.
+HTTP integrations return **422**, omit `Retry-After` and `X-RateLimit-Reset`,
+and return `retry_after: null` in JSON. Smaller requests can still use the
+uncharged quota. Temporary quota exhaustion remains **429** with retry hints.
+
+The public rate range is **1 through 9,007,199,254** requests per second,
+minute, hour, or day. The ceiling keeps scaled capacity × permille weight
+below Lua's largest exactly representable integer. Unsafe rates raise
+`RateLimitConfigError` before Redis is contacted by `check()`,
+`check_with_info()`, `get_usage()`, or decorator creation; `parse_rate()` itself
+raises `ValueError`. This is an arithmetic limit, not a throughput promise.
+
+Direct Redis backend callers use scaled capacity (maximum 9,007,199,254,000)
+and integer windows of 1–86,400 seconds. Token refill rates must be finite and
+between capacity/86,400 and 9,007,199,254,000 scaled units/second, so full refill
+cannot take longer than a day. Lua rejects
+invalid inputs before key mutation. Low-level results use `retry_after=-1`
+and `reset_at=None` for permanent denials; public `CheckResult` and
+`RateLimitExceeded` use `retry_after=None` and `reset_at=None` instead.
+Public token policies refill one capacity per window with millisecond,
+1/1000-unit precision; credited refill units are rebased at whole windows.
+Independent custom backend refill rates retain floating-point arithmetic;
+out-of-range cumulative accrual raises `BackendError` rather than storing
+unsafe state. Token state is written as decimal integer strings, not scientific
+notation. Custom-rate bucket TTLs cover twice the longer of the configured
+window or full-refill duration, plus a 60-second buffer; slow custom rates no
+longer get a fresh quota through premature idle expiry.
+
 ### Error Handling
 
 ```python
 from moderato import RateLimitCallbackError, RateLimitExceeded
+from starlette.responses import JSONResponse
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
-        status_code=429,
+        status_code=exc.status_code,  # 429 for temporary, 422 for permanent denial
         content={
             "error": "Rate limit exceeded",
             "retry_after": exc.retry_after,
             "limit": exc.limit,
         },
-        headers={"Retry-After": str(exc.retry_after)},
+        headers={"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else {},
     )
 
 @app.exception_handler(RateLimitCallbackError)
@@ -402,13 +435,18 @@ try:
     await limiter.check(key="user:123", rate="100/minute")
     # Request allowed
 except RateLimitExceeded as e:
-    # Rate limited
-    print(f"Retry after {e.retry_after} seconds")
+    if e.retry_after is None:
+        print("This cost cannot fit the policy; reduce it or change the policy")
+    else:
+        print(f"Retry after {e.retry_after} seconds")
 
 # Decision check: always returns CheckResult, including a denied decision.
 decision = await limiter.check_with_info(key="user:123", rate="100/minute")
 if not decision.allowed:
-    print(f"Retry after {decision.retry_after} seconds at {decision.reset_at}")
+    if decision.retry_after is None:
+        print("Permanent denial: cost exceeds capacity")
+    else:
+        print(f"Retry after {decision.retry_after} seconds at {decision.reset_at}")
 
 # Get usage statistics
 usage = await limiter.get_usage(key="user:123", rate="100/minute")

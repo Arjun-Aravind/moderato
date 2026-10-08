@@ -819,7 +819,7 @@ class RateLimiter:
         weighted_count_display = weighted_count // 1000
         current_window_display = current_count // 1000
         previous_window_display = previous_count // 1000
-        remaining = max(0, max_requests - weighted_count_display)
+        remaining = max(0, max_requests * 1000 - weighted_count) // 1000
 
         return {
             "current": weighted_count_display,

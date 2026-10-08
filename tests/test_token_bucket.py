@@ -40,6 +40,19 @@ def token_clock(redis_client):
 class TestTokenBucket:
     """Test suite for Token Bucket algorithm."""
 
+    async def test_denied_reset_tracks_requested_cost_not_full_refill(self, token_clock):
+        check, _, base_ms = token_clock
+        assert (await check(0, cost=8000, capacity=10000, window_seconds=60))[0]
+        result = await check(500, cost=3000, capacity=10000, window_seconds=60)
+        assert not result[0]
+        assert result[1] == 2083
+        assert result[2] == 5500
+        # The cost fits at 6s; HTTP's rounded 6s wait from 0.5s is 6.5s,
+        # hence a conservative whole-second reset at 7s, not full refill at 48s.
+        assert result[3] == base_ms // 1000 + 7
+        assert not (await check(5999, cost=3000, capacity=10000, window_seconds=60))[0]
+        assert (await check(6000, cost=3000, capacity=10000, window_seconds=60))[0]
+
     async def test_versioned_keys_isolate_legacy_writers(self, clean_limiter, redis_client):
         identity = f"rolling-{uuid4().hex}"
         legacy_key = generate_key(
@@ -168,7 +181,7 @@ class TestTokenBucket:
             if allowed:
                 balance -= cost
             actual = await check(elapsed_ms, cost, capacity, window_seconds)
-            assert actual[:2] == [int(allowed), int(balance) if allowed else 0], (
+            assert actual[:2] == [int(allowed), int(balance)], (
                 window_seconds,
                 elapsed_ms,
                 cost,

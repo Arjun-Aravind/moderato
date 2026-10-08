@@ -94,7 +94,7 @@ if new_tokens >= cost then
 else
     -- Request is denied - not enough tokens
     allowed = 0
-    remaining = 0
+    remaining = new_tokens
 
     -- Calculate how long until enough tokens are available
     local tokens_needed = cost - new_tokens - fractional_credit
@@ -130,7 +130,7 @@ if allowed == 0 then
     -- A denied caller must not be told to come back before Retry-After,
     -- which clients see rounded up to at least one second from now.
     local retry_after_s = math.max(1, math.ceil(retry_after_ms / 1000))
-    reset_at = math.max(reset_at, math.ceil((current_time_ms + retry_after_s * 1000) / 1000))
+    reset_at = math.ceil((current_time_ms + retry_after_s * 1000) / 1000)
 end
 
 -- retry_after_ms: milliseconds until enough tokens available (0 if allowed)

@@ -19,13 +19,18 @@ class CheckResult:
     Attributes:
         allowed: Whether the request was allowed
         limit: Maximum requests allowed in the window
-        remaining: Requests remaining in the current window
+        remaining: Whole unit-cost requests that fit the remaining capacity,
+            rounded down, including on denial. A smaller cost may still fit
         retry_after: Whole seconds to wait before retrying (0 if allowed)
         reset_at: Unix timestamp, from the Redis-backed decision, for when
             the request may proceed again. For allowed fixed and sliding
             window decisions this is the current window's end; for allowed
             token bucket decisions it is when the bucket is fully refilled.
-            For denials it is when capacity frees up for this request
+            For denials within capacity, fixed windows report the window
+            boundary; token and sliding report a conservative retry
+            timestamp for this cost, assuming no intervening traffic and
+            retained Redis state. Sliding uses a two-bucket estimate, not
+            an exact rolling log. Metadata is not a reservation
         window_seconds: Size of the rate limit window in seconds
 
     Example:

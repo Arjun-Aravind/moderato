@@ -173,6 +173,10 @@ async def endpoint(request: Request):
 - Combines current window with weighted portion of previous window
 - Provides smooth transition between windows
 - Approximates a rolling count with two fixed counters
+- Previous-window weight decreases at whole Redis seconds, rounded down to
+  thousandths; weighted usage is rounded down in scaled (1/1000-unit) capacity
+- This assumes previous traffic was spread across its bucket. Clustered traffic
+  can be under- or overestimated; this is not an exact rolling-window guarantee
 
 **Pros:** Smooths fixed-window boundaries with constant Redis storage
 **Cons:** It is an approximation rather than an exact request log
@@ -182,7 +186,7 @@ async def endpoint(request: Request):
 | Feature | Fixed Window | Token Bucket | Sliding Window |
 |---------|--------------|--------------|----------------|
 | Simplicity | High | Medium | Medium |
-| Boundary Bursts | Possible (2x) | None | None |
+| Boundary behavior | Can admit 2x across a boundary | No aligned window reset; bursts up to capacity | Weighted transition; approximate, not a strict rolling quota |
 | Redis data | String counter | Hash with tokens, refill timestamp, and credited refill units | Two string counters |
 | Traffic behavior | Resets at boundaries | Continuous refill | Weighted window transition |
 | Accuracy model | Exact fixed window | Exact token bucket state | Approximate rolling window |
@@ -278,7 +282,8 @@ app.add_middleware(RateLimitHeadersMiddleware)
 
 **Headers added to decorated responses:**
 - `X-RateLimit-Limit`: Maximum requests allowed
-- `X-RateLimit-Remaining`: Requests remaining in current window
+- `X-RateLimit-Remaining`: Whole unit-cost requests that fit the remaining capacity,
+  rounded down (estimated for sliding windows), including on a denial
 - `X-RateLimit-Reset`: Unix timestamp returned by the Redis-backed decision
 
 **Additional headers on 429 responses:**
@@ -286,6 +291,18 @@ app.add_middleware(RateLimitHeadersMiddleware)
 
 `Retry-After` is rounded up from the Lua decision's millisecond delay. Reset
 timestamps come from Redis-backed metadata rather than the application clock.
+On an allowed fixed/sliding check, reset is the current bucket's end; on an
+allowed token check, it is full-refill time. On a denial whose cost fits the
+policy capacity, fixed reset is the window boundary; token/sliding reset is a
+conservative timestamp for retrying **that cost**, not for recovering the whole
+quota. Sliding retries follow the same quantized two-bucket estimate as admission,
+including rollover, and may extend beyond the next boundary.
+
+For example, after using 8 of 10 units, a cost-3 request is denied with 2
+remaining, and a cost-2 request can still succeed. `CheckResult`, exceptions,
+and headers use the decision's capacity; `get_usage()` is a later, non-atomic
+snapshot, not a reservation. Retry hints assume no intervening traffic and
+retained Redis state; other callers may consume the predicted capacity.
 
 ### Prometheus Metrics
 

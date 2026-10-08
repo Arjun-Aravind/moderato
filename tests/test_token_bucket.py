@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from moderato import RateLimitExceeded
+from moderato.utils import generate_key
 from tests.conftest import sleep_past_window_boundary
 
 
@@ -38,6 +39,58 @@ def token_clock(redis_client):
 @pytest.mark.asyncio
 class TestTokenBucket:
     """Test suite for Token Bucket algorithm."""
+
+    async def test_versioned_keys_isolate_legacy_writers(self, clean_limiter, redis_client):
+        identity = f"rolling-{uuid4().hex}"
+        legacy_key = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p2x3600", "bucket"
+        )
+        now_ms = await clean_limiter.backend.get_redis_time_ms()
+        await redis_client.hset(legacy_key, mapping={"tokens": 0, "last_refill_ms": now_ms})
+        await redis_client.expire(legacy_key, 7260)
+        legacy_before = await redis_client.hgetall(legacy_key)
+
+        result = await clean_limiter.check_with_info(
+            key=identity, rate="2/hour", algorithm="token_bucket"
+        )
+        assert result.allowed
+        assert result.remaining == 1
+        assert await redis_client.hgetall(legacy_key) == legacy_before
+        versioned_key = f"{legacy_key}:v2"
+        assert await redis_client.exists(versioned_key)
+
+        # Simulate an old writer moving its timestamp. New usage/admission
+        # must still read only the versioned hash, not the legacy state.
+        await redis_client.hset(legacy_key, mapping={"tokens": 2000, "last_refill_ms": now_ms})
+        legacy_after = await redis_client.hgetall(legacy_key)
+        usage = await clean_limiter.get_usage(key=identity, rate="2/hour", algorithm="token_bucket")
+        assert usage["remaining"] == 1
+        assert await clean_limiter.check(key=identity, rate="2/hour", algorithm="token_bucket")
+        assert not (
+            await clean_limiter.check_with_info(
+                key=identity, rate="2/hour", algorithm="token_bucket"
+            )
+        ).allowed
+        assert await redis_client.hgetall(legacy_key) == legacy_after
+
+    @pytest.mark.parametrize("tenant_type", [None, "default"])
+    async def test_reset_finds_versioned_token_keys(self, clean_limiter, redis_client, tenant_type):
+        identity = f"version-reset-{uuid4().hex}"
+        token_key = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p1x3600", "bucket:v2"
+        )
+        unrelated = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p1x3600", "bucket:v3"
+        )
+        await redis_client.hset(token_key, mapping={"tokens": 0, "last_refill_ms": 1})
+        await redis_client.set(unrelated, "keep")
+        await clean_limiter.check(key=identity, rate="1/hour", algorithm="fixed_window")
+        assert await clean_limiter.reset(
+            identity, algorithm="token_bucket", tenant_type=tenant_type
+        )
+        assert not await redis_client.exists(token_key)
+        assert await redis_client.get(unrelated) == "keep"
+        assert (await clean_limiter.get_usage(key=identity, rate="1/hour"))["current"] == 1
 
     async def test_polling_preserves_fractional_refill(self, token_clock):
         check, _, _ = token_clock

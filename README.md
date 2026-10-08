@@ -147,12 +147,17 @@ async def endpoint(request: Request):
 **Pros:** Continuous refill and configurable burst capacity
 **Cons:** State uses a Redis hash and allows bursts up to bucket capacity
 
-For the planned 0.5.0 upgrade, token hashes gain a `refill_units` field. Existing
-hashes are accepted, but do not mix old and new token scripts on the same keys:
-stop old writers before upgrading. Using a separate `key_prefix` isolates a new
-deployment but starts fresh quotas. Rolling back also requires isolated keys or
-waiting for the new hashes to expire before old writers resume. Previously lost
-refill credit is not restored.
+For the planned 0.5.0 upgrade, `RateLimiter` uses token keys ending in
+`:bucket:v2` rather than `:bucket`. This isolates the new `refill_units` hash
+schema from old writers during rolling deployments and rollback. New buckets
+start full; old quotas are not migrated and their keys expire normally.
+During overlap, old and new workers enforce independent quotas, so their
+combined traffic can exceed a single quota. Versioning prevents state corruption,
+not uninterrupted quota continuity. Rollback resumes the old quota if its key
+still exists, otherwise it starts fresh. Applications requiring strict continuity
+must coordinate the cutover. Direct backend callers supply their own keys and
+must version those keys themselves. An explicit token `reset()` removes both
+recognized legacy and v2 keys for the selected identity and tenant.
 
 ### Sliding Window
 

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fixed windows now charge only admitted requests, matching token bucket and sliding window accounting. Rejected requests no longer increment usage or consume the capacity that a smaller request could use. Existing counters inflated by older rejected attempts remain until their window expires or they are explicitly reset.
 - Token buckets preserve fractional refill progress across checks, including denied polling and partial consumption. Recovery no longer depends on polling frequency. Full buckets discard idle fractional credit before consumption.
-- Token bucket hashes gain `refill_units`, recording whole scaled units credited since their refill origin. Existing hashes without it are accepted, but previously discarded credit cannot be recovered. Do not run old and new token scripts against the same keys concurrently: stop old writers before upgrading. A separate `key_prefix` can isolate versions, but starts fresh quotas. Rollback requires isolated keys or expiry of the new hashes before old writers resume.
+- Token bucket hashes gain `refill_units`, recording whole scaled units credited since their refill origin. `RateLimiter` now uses `:bucket:v2` keys, automatically isolating the new schema from old writers and rollback. Upgrade starts fresh quotas; during rolling overlap, old and new workers enforce independent quotas and combined traffic can exceed a single quota. Rollback resumes legacy quota state if retained. Strict quota continuity requires a coordinated cutover. Direct backend callers must version their supplied keys themselves. Explicit token resets include recognized legacy and v2 keys.
 
 ### Fixed
 

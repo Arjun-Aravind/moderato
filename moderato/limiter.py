@@ -51,6 +51,10 @@ def _suffix_matches_algorithm(suffix: str, algorithm: str, has_tenant_prefix: bo
             len(parts) in (prefix_length + 2, prefix_length + 3)
             and re.match(policy_re, parts[-2]) is not None
             and parts[-1] == "bucket"
+        ) or (
+            len(parts) in (prefix_length + 3, prefix_length + 4)
+            and re.match(policy_re, parts[-3]) is not None
+            and parts[-2:] == ["bucket", "v2"]
         )
     if algorithm == "sliding_window":
         return (
@@ -351,13 +355,13 @@ class RateLimiter:
                 ),
             )
         elif algorithm == "token_bucket":
-            # Token bucket uses persistent key (no time window needed)
+            # Isolate the refill_units schema from old writers and rollbacks.
             full_key = generate_key(
                 self.config.key_prefix,
                 key,
                 tenant_type,
                 policy,
-                "bucket",
+                "bucket:v2",
                 scope=scope,
             )
             # Use milliseconds for precision with low rates (e.g., 1/hour)
@@ -726,7 +730,7 @@ class RateLimiter:
             key,
             tenant_type,
             _policy_component(max_requests, window_seconds),
-            "bucket",
+            "bucket:v2",
             scope=scope,
         )
 

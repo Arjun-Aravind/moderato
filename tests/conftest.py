@@ -139,6 +139,31 @@ async def clean_limiter(redis_url: str) -> AsyncGenerator[RateLimiter, None]:
 
 
 @pytest.fixture
+async def frozen_limiter(clean_limiter, monkeypatch):
+    """Run real Redis scripts and usage snapshots at one fixed midday."""
+    backend = clean_limiter.backend
+    now, _ = await backend.get_redis_time()
+    # Fixed-window EXPIREAT still uses Redis's real clock. Pick tomorrow's
+    # midday so synthetic counters cannot expire during the request sequence.
+    frozen_seconds = (now // 86400 + 1) * 86400 + 43200
+    for name, source in backend._scripts.items():
+        assert source.count("redis.call('TIME')") == 1
+        monkeypatch.setitem(
+            backend._scripts,
+            name,
+            source.replace("redis.call('TIME')", f"{{'{frozen_seconds}', '0'}}"),
+        )
+    # Replace the registered SHAs too: checks normally use EVALSHA, not EVAL.
+    await backend._register_scripts()
+
+    async def frozen_time():
+        return frozen_seconds, 0
+
+    monkeypatch.setattr(backend, "get_redis_time", frozen_time)
+    return clean_limiter
+
+
+@pytest.fixture
 def rate_limits():
     """Common rate limit configurations for testing."""
     return {

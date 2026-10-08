@@ -26,8 +26,8 @@ class CheckResult:
             the request may proceed again. For allowed fixed and sliding
             window decisions this is the current window's end; for allowed
             token bucket decisions it is when the bucket is fully refilled.
-            For fixed window denials it is the window boundary. For token
-            and sliding denials within capacity it is a conservative retry
+            For denials within capacity, fixed windows report the window
+            boundary; token and sliding report a conservative retry
             timestamp for this cost, assuming no intervening traffic and
             retained Redis state. Sliding uses a two-bucket estimate, not
             an exact rolling log. Metadata is not a reservation

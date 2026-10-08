@@ -235,14 +235,14 @@ class TestMiddlewareIntegration:
     """Integration tests for middleware with actual rate limiter."""
 
     @pytest.mark.parametrize("algorithm", ["fixed_window", "token_bucket", "sliding_window"])
-    async def test_denial_preserves_remaining_capacity(self, clean_limiter, algorithm):
+    async def test_denial_preserves_remaining_capacity(self, frozen_limiter, algorithm):
         import httpx
 
         app = FastAPI()
         app.add_middleware(RateLimitHeadersMiddleware)
 
         @app.get("/weighted")
-        @clean_limiter.limit(
+        @frozen_limiter.limit(
             "10/day",
             algorithm=algorithm,
             key=lambda request: "client",
@@ -260,7 +260,7 @@ class TestMiddlewareIntegration:
             denied = await client.get("/weighted", headers={"x-cost": "3"})
             assert denied.status_code == 429
             assert denied.headers["X-RateLimit-Remaining"] == "2"
-            usage = await clean_limiter.get_usage(
+            usage = await frozen_limiter.get_usage(
                 key="client", rate="10/day", algorithm=algorithm, scope="metadata"
             )
             assert usage["remaining"] == 2

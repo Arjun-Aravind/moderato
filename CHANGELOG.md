@@ -12,10 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed windows now charge only admitted requests, matching token bucket and sliding window accounting. Rejected requests no longer increment usage or consume the capacity that a smaller request could use. Existing counters inflated by older rejected attempts remain until their window expires or they are explicitly reset.
 - Token buckets preserve fractional refill progress across checks, including denied polling and partial consumption. Recovery no longer depends on polling frequency. Full buckets discard idle fractional credit before consumption.
 - Token bucket hashes gain `refill_units`, recording whole scaled units credited since their refill origin. `RateLimiter` now uses `:bucket:v2` keys, automatically isolating the new schema from old writers and rollback. Upgrade starts fresh quotas; during rolling overlap, old and new workers enforce independent quotas and combined traffic can exceed a single quota. Rollback resumes legacy quota state if retained. Strict quota continuity requires a coordinated cutover. Direct backend callers must version their supplied keys themselves. Explicit token resets include recognized legacy and v2 keys.
+- Denials now report actual remaining capacity, rounded down to whole unit-cost requests, across all algorithms and HTTP headers. A smaller request may still fit. Sliding `get_usage()` rounds remaining capacity down before converting to display units, so displayed usage and remaining need not sum to the limit.
+- Sliding window retry hints now follow the whole-second, permille-rounded two-bucket estimate through rollover, rather than assuming all current usage disappears at the next boundary. For costs within capacity, denied token/sliding `reset_at` is a conservative retry timestamp for that cost, not full-quota recovery. Allowed reset metadata is unchanged. Retry hints assume no intervening admissions and retained Redis state; they are not reservations or exact rolling-window guarantees.
 
 ### Fixed
 
 - Token bucket recovery timestamps and retry delays account for fractional progress and the actual depletion time of a full bucket.
+- Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
 
 ## v0.4.0 (2026-10-07)
 

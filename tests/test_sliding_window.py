@@ -9,11 +9,14 @@ These tests validate the sliding window implementation, focusing on:
 """
 
 import asyncio
+import math
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from moderato import RateLimitExceeded
+from moderato.utils import generate_key
 
 
 @pytest.mark.asyncio
@@ -105,6 +108,28 @@ class TestSlidingWindowBasic:
 class TestSlidingWindowWeighting:
     """Tests for sliding window weighting calculation (C2/C3 fixes)."""
 
+    @pytest.mark.parametrize("elapsed", [0, 30, 59])
+    async def test_fractional_usage_does_not_round_capacity_up(
+        self, clean_limiter, redis_client, monkeypatch, elapsed
+    ):
+        identity = f"fractional-usage-{uuid4().hex}"
+        base = (2_000_000_000 // 60) * 60
+        prefix = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p1x60", "sliding"
+        )
+        await redis_client.set(f"{prefix}:{base - 60}", 1000)
+
+        async def time_at_offset():
+            return base + elapsed, 0
+
+        monkeypatch.setattr(clean_limiter.backend, "get_redis_time", time_at_offset)
+        usage = await clean_limiter.get_usage(
+            key=identity, rate="1/minute", algorithm="sliding_window"
+        )
+        # Some previous capacity is still occupied at every selected offset;
+        # not one whole request fits even when displayed usage rounds to zero.
+        assert usage["remaining"] == 0
+
     async def test_weight_calculation_mid_window(self, clean_limiter):
         """
         Test weighted calculation at middle of window.
@@ -184,6 +209,48 @@ class TestSlidingWindowWeighting:
 @pytest.mark.asyncio
 class TestSlidingWindowRetryAfter:
     """Tests for accurate retry_after calculation (NEW-C13 fix)."""
+
+    @pytest.mark.parametrize(
+        "window,current,previous,cost,offset_ms,first_fit",
+        [
+            (60, 10000, 0, 1000, 10500, 66),
+            (60, 8000, 0, 3000, 10500, 68),
+            (60, 2000, 10000, 1000, 10500, 18),
+            (60, 2000, 10000, 1000, 17500, 18),
+            (7, 10000, 0, 1000, 2500, 8),
+            (3, 8000, 0, 3000, 1500, 4),
+            (1, 10000, 0, 1000, 500, 2),
+            (60, 10000, 3000, 10000, 59500, 120),
+            (60, 0, 11000, 1000, 0, 11),
+        ],
+    )
+    async def test_retry_reaches_cost_specific_capacity(
+        self, redis_client, window, current, previous, cost, offset_ms, first_fit
+    ):
+        source = (Path(__file__).parents[1] / "moderato/scripts/sliding_window.lua").read_text()
+        prefix = f"test:sliding-retry:{uuid4().hex}:"
+        base = (2_000_000_000 // window) * window
+        await redis_client.mset({f"{prefix}{base}": current, f"{prefix}{base - window}": previous})
+
+        async def check(at_ms):
+            now_ms = base * 1000 + at_ms
+            assert source.count("redis.call('TIME')") == 1
+            script = source.replace(
+                "redis.call('TIME')", f"{{'{now_ms // 1000}', '{(now_ms % 1000) * 1000}'}}"
+            )
+            return await redis_client.eval(script, 1, prefix, 10000, window, cost)
+
+        result = await check(offset_ms)
+        assert not result[0]
+        # Hand-derived first-fit boundaries use the documented whole-second,
+        # permille estimate, including current->previous rollover.
+        assert result[2] == first_fit * 1000 - offset_ms
+        assert not (await check(first_fit * 1000 - 1))[0]
+        assert (await check(first_fit * 1000))[0]
+
+        # Retry-After is rounded up for HTTP. Its absolute timestamp must not
+        # precede that conservative delay from the sampled Redis time.
+        assert result[3] == base + math.ceil(offset_ms / 1000) + math.ceil(result[2] / 1000)
 
     async def test_retry_after_is_accurate(self, clean_limiter):
         """

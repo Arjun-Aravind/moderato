@@ -542,6 +542,20 @@ class TestRetryAfterAccuracy:
 class TestEmptyAndMissingKeys:
     """Tests for edge cases with empty or missing data."""
 
+    @pytest.mark.parametrize("algorithm", ["fixed_window", "token_bucket", "sliding_window"])
+    async def test_denial_leaves_capacity_for_smaller_cost(self, clean_limiter, algorithm):
+        kwargs = {"key": f"weighted-{uuid4().hex}", "rate": "10/day", "algorithm": algorithm}
+        admitted = await clean_limiter.check_with_info(**kwargs, cost=8)
+        assert admitted.allowed and admitted.remaining == 2
+        denied = await clean_limiter.check_with_info(**kwargs, cost=3)
+        assert not denied.allowed and denied.remaining == 2
+        with pytest.raises(RateLimitExceeded) as exc_info:
+            await clean_limiter.check(**kwargs, cost=3)
+        assert exc_info.value.remaining == 2
+        assert (await clean_limiter.get_usage(**kwargs))["remaining"] == 2
+        smaller = await clean_limiter.check_with_info(**kwargs, cost=2)
+        assert smaller.allowed and smaller.remaining == 0
+
     async def test_get_usage_nonexistent_key(self, clean_limiter):
         """Test get_usage for a key that doesn't exist."""
         limiter = clean_limiter

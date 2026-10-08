@@ -104,7 +104,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
 
             headers = self._create_rate_limit_headers(
                 limit=limit_display,
-                remaining=0,
+                remaining=exc.remaining,
                 reset_at=exc.reset_at,
                 retry_after=exc.retry_after,
             )

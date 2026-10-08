@@ -94,70 +94,36 @@ if (weighted_count + cost) <= max_requests then
 else
     -- Request is denied
     allowed = 0
-    remaining = 0
+    remaining = math.max(0, max_requests - weighted_count)
 
-    -- Calculate time until enough capacity is available
-    -- As window progresses, previous_weight decreases, freeing up capacity
-    --
-    -- Math derivation:
-    -- At time t (elapsed seconds into window):
-    --   weight(t) = (window_seconds - t) / window_seconds
-    --   weighted_count(t) = current_count + previous_count * weight(t)
-    --
-    -- We need: weighted_count(t) + cost <= max_requests
-    -- Solve for t:
-    --   current_count + previous_count * (window_seconds - t) / window_seconds <= max_requests - cost
-    --   previous_count * (window_seconds - t) <= (max_requests - cost - current_count) * window_seconds
-    --   (window_seconds - t) <= (max_requests - cost - current_count) * window_seconds / previous_count
-    --   t >= window_seconds - (max_requests - cost - current_count) * window_seconds / previous_count
-    --
-    -- Using integer math with 1000x scale:
-    --   t_needed = window_seconds - ((max_requests - cost - current_count) * window_seconds) / previous_count
-    --   wait_time = t_needed - elapsed_in_window
-
-    local tokens_needed = (weighted_count + cost) - max_requests
-
-    if previous_count > 0 then
-        -- Calculate exact time until weight decrease frees enough tokens
-        -- available_capacity = max_requests - cost - current_count
-        local available_capacity = max_requests - cost - current_count
-
-        if available_capacity < 0 then
-            -- Current window alone exceeds limit, must wait for next window
-            retry_after_ms = remaining_in_window * 1000
-        else
-            -- Calculate when previous window weight will be low enough
-            -- We need: previous_count * weight <= available_capacity
-            -- weight = (window_seconds - t) / window_seconds
-            -- So: (window_seconds - t) <= available_capacity * window_seconds / previous_count
-            -- t >= window_seconds - (available_capacity * window_seconds / previous_count)
-
-            -- Using integer math: multiply by 1000 for precision
-            local target_elapsed = window_seconds * 1000 -
-                math.floor((available_capacity * window_seconds * 1000) / previous_count)
-
-            -- Wait time is target_elapsed - current_elapsed (in milliseconds)
-            local wait_ms = target_elapsed - (elapsed_in_window * 1000)
-
-            if wait_ms > 0 then
-                retry_after_ms = wait_ms
+    if cost <= max_requests then
+        -- Without intervening admissions the estimate is monotone. Search
+        -- whole Redis seconds using the same permille rounding as admission.
+        -- At rollover current becomes previous; it does not disappear.
+        -- By the second boundary both sampled counts have aged out.
+        local low = current_timestamp + 1
+        local high = window_start + window_seconds * 2
+        while low < high do
+            local candidate = math.floor((low + high) / 2)
+            local candidate_count
+            if candidate < window_start + window_seconds then
+                local weight = math.floor(
+                    ((window_start + window_seconds - candidate) * 1000) / window_seconds)
+                candidate_count = current_count + math.floor((previous_count * weight) / 1000)
             else
-                -- Calculation suggests we should already be allowed (edge case)
-                -- Use minimum wait time
-                retry_after_ms = 1000
+                local weight = math.floor(
+                    ((window_start + window_seconds * 2 - candidate) * 1000) / window_seconds)
+                candidate_count = math.floor((current_count * weight) / 1000)
+            end
+            if candidate_count + cost <= max_requests then
+                high = candidate
+            else
+                low = candidate + 1
             end
         end
+        retry_after_ms = low * 1000 - current_timestamp_ms
     else
-        -- No previous window count, but current exceeds limit
-        -- Wait until next window starts
-        retry_after_ms = remaining_in_window * 1000
-    end
-
-    -- Ensure at least 1 second wait and cap at remaining_in_window
-    if retry_after_ms < 1000 then
-        retry_after_ms = 1000
-    end
-    if retry_after_ms > remaining_in_window * 1000 then
+        -- Permanent oversized-cost denial is handled in the bounds change.
         retry_after_ms = remaining_in_window * 1000
     end
 end
@@ -169,8 +135,10 @@ local reset_at
 if allowed == 1 then
     reset_at = window_start + window_seconds
 else
-    reset_at = math.ceil((current_timestamp_ms + retry_after_ms) / 1000)
+    local retry_after_s = math.max(1, math.ceil(retry_after_ms / 1000))
+    reset_at = math.ceil((current_timestamp_ms + retry_after_s * 1000) / 1000)
 end
 
--- retry_after_ms: milliseconds until rate limit might allow request
+-- retry_after_ms: milliseconds until this cost fits the estimate, assuming
+-- no intervening traffic and retained state (for costs within capacity).
 return {allowed, remaining, retry_after_ms, reset_at}

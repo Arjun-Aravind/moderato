@@ -234,6 +234,60 @@ class TestRateLimitHeadersMiddleware:
 class TestMiddlewareIntegration:
     """Integration tests for middleware with actual rate limiter."""
 
+    @pytest.mark.parametrize("algorithm", ["fixed_window", "token_bucket", "sliding_window"])
+    async def test_denial_preserves_remaining_capacity(self, clean_limiter, algorithm):
+        import httpx
+
+        app = FastAPI()
+        app.add_middleware(RateLimitHeadersMiddleware)
+
+        @app.get("/weighted")
+        @clean_limiter.limit(
+            "10/day",
+            algorithm=algorithm,
+            key=lambda request: "client",
+            cost=lambda request: int(request.headers["x-cost"]),
+            scope="metadata",
+        )
+        async def weighted(request: Request):
+            return {"ok": True}
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.get("/weighted", headers={"x-cost": "8"})
+            assert first.status_code == 200
+            assert first.headers["X-RateLimit-Remaining"] == "2"
+            denied = await client.get("/weighted", headers={"x-cost": "3"})
+            assert denied.status_code == 429
+            assert denied.headers["X-RateLimit-Remaining"] == "2"
+            usage = await clean_limiter.get_usage(
+                key="client", rate="10/day", algorithm=algorithm, scope="metadata"
+            )
+            assert usage["remaining"] == 2
+            smaller = await client.get("/weighted", headers={"x-cost": "2"})
+            assert smaller.status_code == 200
+            assert smaller.headers["X-RateLimit-Remaining"] == "0"
+
+    async def test_429_preserves_exception_remaining(self):
+        import httpx
+
+        from moderato import RateLimitExceeded
+
+        app = FastAPI()
+        app.add_middleware(RateLimitHeadersMiddleware)
+
+        @app.get("/denied")
+        async def denied(request: Request):
+            raise RateLimitExceeded(retry_after=7, limit="10/minute", remaining=2)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/denied")
+        assert response.status_code == 429
+        assert response.headers["X-RateLimit-Remaining"] == "2"
+        assert response.headers["Retry-After"] == "7"
+
     async def test_middleware_with_limiter_check(self, clean_limiter):
         """Test middleware integration with actual limiter."""
         import httpx

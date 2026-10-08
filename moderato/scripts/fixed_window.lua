@@ -72,14 +72,8 @@ if ttl < 0 then
 end
 
 -- Calculate if request is allowed
-local remaining = 0
-
-if allowed == 1 then
-    remaining = max_requests - current
-else
-    -- Request is denied, no remaining capacity
-    remaining = 0
-end
+-- A denied weighted request can leave capacity for a smaller request.
+local remaining = math.max(0, max_requests - current)
 
 -- Return results
 -- allowed: 1 if request should proceed, 0 if rate limited

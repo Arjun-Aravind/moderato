@@ -101,6 +101,15 @@ This gives you:
 
 Moderato provides three tested algorithms. Choose based on the traffic behavior you want:
 
+All three algorithms charge only **admitted requests**. For example, under a
+`10/minute` limit, after using 8 units, a cost-3 request is rejected without
+consuming quota; a subsequent cost-2 request can still be admitted. Admission
+charges the quota even if the protected application operation later fails.
+
+This is a planned **0.5.0 behavior change** for fixed windows, which previously
+charged rejected attempts. Existing counters retain their recorded usage until
+expiry or an explicit reset; upgrading does not undo earlier charges.
+
 ### Fixed Window (Default)
 
 **Best for:** Simple rate limiting, strict per-window limits, lower memory usage
@@ -113,7 +122,7 @@ async def endpoint(request: Request):
 
 **How it works:**
 - Time divided into fixed windows (e.g., 14:35:00 - 14:36:00)
-- Counter increments per request
+- Counter increments by cost only when the request fits the remaining quota
 - Resets when window expires
 
 **Pros:** Simple, low memory, strict limits  
@@ -132,10 +141,23 @@ async def endpoint(request: Request):
 **How it works:**
 - Bucket holds tokens (capacity = 100)
 - Tokens refill continuously (~1.67/second for 100/minute)
-- Each request consumes tokens
+- Each admitted request consumes tokens; denied polling preserves refill progress
+- Full buckets discard excess idle credit, including fractional credit
 
 **Pros:** Continuous refill and configurable burst capacity
 **Cons:** State uses a Redis hash and allows bursts up to bucket capacity
+
+For the planned 0.5.0 upgrade, `RateLimiter` uses token keys ending in
+`:bucket:v2` rather than `:bucket`. This isolates the new `refill_units` hash
+schema from old writers during rolling deployments and rollback. New buckets
+start full; old quotas are not migrated and their keys expire normally.
+During overlap, old and new workers enforce independent quotas, so their
+combined traffic can exceed a single quota. Versioning prevents state corruption,
+not uninterrupted quota continuity. Rollback resumes the old quota if its key
+still exists, otherwise it starts fresh. Applications requiring strict continuity
+must coordinate the cutover. Direct backend callers supply their own keys and
+must version those keys themselves. An explicit token `reset()` removes both
+recognized legacy and v2 keys for the selected identity and tenant.
 
 ### Sliding Window
 
@@ -161,7 +183,7 @@ async def endpoint(request: Request):
 |---------|--------------|--------------|----------------|
 | Simplicity | High | Medium | Medium |
 | Boundary Bursts | Possible (2x) | None | None |
-| Redis data | String counter | Hash with tokens and timestamp | Two string counters |
+| Redis data | String counter | Hash with tokens, refill timestamp, and credited refill units | Two string counters |
 | Traffic behavior | Resets at boundaries | Continuous refill | Weighted window transition |
 | Accuracy model | Exact fixed window | Exact token bucket state | Approximate rolling window |
 

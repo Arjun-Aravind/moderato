@@ -39,12 +39,18 @@ local window_start = now - (now % window_seconds)
 local window_end = window_start + window_seconds
 local key = key_prefix .. window_start
 
--- Increment counter atomically by cost
-local current = redis.call('INCRBY', key, cost)
+-- Read, decide, and increment within this atomic script. Rejected requests
+-- must not consume capacity that a smaller request could still use.
+local current = tonumber(redis.call('GET', key)) or 0
+local allowed = 0
+if current + cost <= max_requests then
+    current = redis.call('INCRBY', key, cost)
+    allowed = 1
+end
 
 -- Set expiration using EXPIREAT on first request (when counter equals cost)
 -- This ensures the window expires at the correct boundary, not relative to first request
-if current == cost then
+if allowed == 1 and current == cost then
     redis.call('EXPIREAT', key, window_end)
 end
 
@@ -56,23 +62,19 @@ local ttl = redis.call('PTTL', key)
 -- TTL = -2 means key doesn't exist
 -- NOTE: We do NOT reset TTL when ttl=0 (key about to expire) - that's valid behavior
 if ttl < 0 then
-    -- Ensure expiration is set (in case EXPIREAT failed earlier)
-    redis.call('EXPIREAT', key, window_end)
-    ttl = redis.call('PTTL', key)
-    -- EXPIREAT deletes keys whose time already passed; report an expired
-    -- window instead of negative metadata.
-    if ttl < 0 then
-        ttl = 0
+    if ttl == -1 then
+        -- Repair an existing counter without expiry; don't create a counter
+        -- or extend an already-valid expiry on rejected requests.
+        redis.call('EXPIREAT', key, window_end)
     end
+    local now_ms = now * 1000 + math.floor(tonumber(time[2]) / 1000)
+    ttl = math.max(0, window_end * 1000 - now_ms)
 end
 
 -- Calculate if request is allowed
-local allowed = 0
 local remaining = 0
 
-if current <= max_requests then
-    -- Request is allowed
-    allowed = 1
+if allowed == 1 then
     remaining = max_requests - current
 else
     -- Request is denied, no remaining capacity

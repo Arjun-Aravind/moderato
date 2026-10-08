@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased (planned 0.5.0)
+
+### Behavior changes
+
+- Fixed windows now charge only admitted requests, matching token bucket and sliding window accounting. Rejected requests no longer increment usage or consume the capacity that a smaller request could use. Existing counters inflated by older rejected attempts remain until their window expires or they are explicitly reset.
+- Token buckets preserve fractional refill progress across checks, including denied polling and partial consumption. Recovery no longer depends on polling frequency. Full buckets discard idle fractional credit before consumption.
+- Token bucket hashes gain `refill_units`, recording whole scaled units credited since their refill origin. `RateLimiter` now uses `:bucket:v2` keys, automatically isolating the new schema from old writers and rollback. Upgrade starts fresh quotas; during rolling overlap, old and new workers enforce independent quotas and combined traffic can exceed a single quota. Rollback resumes legacy quota state if retained. Strict quota continuity requires a coordinated cutover. Direct backend callers must version their supplied keys themselves. Explicit token resets include recognized legacy and v2 keys.
+
+### Fixed
+
+- Token bucket recovery timestamps and retry delays account for fractional progress and the actual depletion time of a full bucket.
+
 ## v0.4.0 (2026-10-07)
 
 ### Changed

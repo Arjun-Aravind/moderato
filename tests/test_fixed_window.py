@@ -184,6 +184,42 @@ class TestFixedWindow:
             await limiter.check(key=key, rate=rate, cost=1)
 
     @pytest.mark.asyncio
+    async def test_rejected_cost_preserves_capacity(self, clean_limiter):
+        key = f"admission-only-{uuid4().hex}"
+        rate = "10/day"
+        assert await clean_limiter.check(key=key, rate=rate, cost=8)
+        ttl_before = await raw_key_ttl(
+            clean_limiter.backend, f"{clean_limiter.config.key_prefix}:*"
+        )
+
+        for _ in range(3):
+            denied = await clean_limiter.check_with_info(key=key, rate=rate, cost=3)
+            assert not denied.allowed
+
+        usage = await clean_limiter.get_usage(key=key, rate=rate)
+        assert usage["current"] == 8
+        assert usage["remaining"] == 2
+        ttl_after = await raw_key_ttl(clean_limiter.backend, f"{clean_limiter.config.key_prefix}:*")
+        assert 0 <= ttl_after <= ttl_before
+        result = await clean_limiter.check_with_info(key=key, rate=rate, cost=2)
+        assert result.allowed
+        assert result.remaining == 0
+
+    @pytest.mark.asyncio
+    async def test_concurrent_rejections_do_not_charge_counter(self, clean_limiter):
+        key = f"concurrent-admissions-{uuid4().hex}"
+        rate = "10/day"
+        results = await asyncio.gather(
+            *(clean_limiter.check_with_info(key=key, rate=rate, cost=3) for _ in range(20))
+        )
+        assert sum(result.allowed for result in results) == 3
+        assert sorted(result.remaining for result in results if result.allowed) == [1, 4, 7]
+        usage = await clean_limiter.get_usage(key=key, rate=rate)
+        assert usage["current"] == 9
+        assert usage["remaining"] == 1
+        assert await clean_limiter.check(key=key, rate=rate, cost=1)
+
+    @pytest.mark.asyncio
     async def test_get_usage_stats(self, clean_limiter):
         """Test getting usage statistics for a key."""
         limiter = clean_limiter

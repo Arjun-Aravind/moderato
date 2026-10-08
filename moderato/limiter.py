@@ -51,6 +51,10 @@ def _suffix_matches_algorithm(suffix: str, algorithm: str, has_tenant_prefix: bo
             len(parts) in (prefix_length + 2, prefix_length + 3)
             and re.match(policy_re, parts[-2]) is not None
             and parts[-1] == "bucket"
+        ) or (
+            len(parts) in (prefix_length + 3, prefix_length + 4)
+            and re.match(policy_re, parts[-3]) is not None
+            and parts[-2:] == ["bucket", "v2"]
         )
     if algorithm == "sliding_window":
         return (
@@ -351,13 +355,13 @@ class RateLimiter:
                 ),
             )
         elif algorithm == "token_bucket":
-            # Token bucket uses persistent key (no time window needed)
+            # Isolate the refill_units schema from old writers and rollbacks.
             full_key = generate_key(
                 self.config.key_prefix,
                 key,
                 tenant_type,
                 policy,
-                "bucket",
+                "bucket:v2",
                 scope=scope,
             )
             # Use milliseconds for precision with low rates (e.g., 1/hour)
@@ -726,7 +730,7 @@ class RateLimiter:
             key,
             tenant_type,
             _policy_component(max_requests, window_seconds),
-            "bucket",
+            "bucket:v2",
             scope=scope,
         )
 
@@ -735,15 +739,17 @@ class RateLimiter:
         # Get current tokens (with 1000x multiplier)
         stored_tokens = usage.get("tokens", 0)
         last_refill_ms = usage.get("last_refill_ms", 0)
+        refill_units = usage.get("refill_units", 0)
 
-        # Calculate tokens after refill since last update
+        # Only add units not already credited since the stored refill origin.
         max_tokens = max_requests * 1000
         refill_rate_per_second = max_tokens / window_seconds
 
         if last_refill_ms > 0:
             current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
             time_elapsed_ms = max(0, current_time_ms - last_refill_ms)
-            tokens_to_add = (refill_rate_per_second * time_elapsed_ms) // 1000
+            accrued_units = int((refill_rate_per_second * time_elapsed_ms) / 1000)
+            tokens_to_add = max(0, accrued_units - refill_units)
             current_tokens = min(max_tokens, stored_tokens + tokens_to_add)
         else:
             # Bucket not yet created, would start full

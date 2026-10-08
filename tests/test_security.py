@@ -685,6 +685,13 @@ class TestPolicyIsolation:
         assert _suffix_matches_algorithm(
             "default:global:p100x60:bucket", "token_bucket", has_tenant_prefix=True
         )
+        assert _suffix_matches_algorithm("global:p100x60:bucket:v2", "token_bucket")
+        assert _suffix_matches_algorithm(
+            "default:global:p100x60:bucket:v2", "token_bucket", has_tenant_prefix=True
+        )
+        assert not _suffix_matches_algorithm("global:p100x60:bucket:v3", "token_bucket")
+        assert not _suffix_matches_algorithm("extra:global:p100x60:bucket:v2", "token_bucket")
+        assert not _suffix_matches_algorithm("global:p100x60:sliding:v2", "token_bucket")
         assert not _suffix_matches_algorithm("extra:global:p100x60:bucket", "token_bucket")
         assert not _suffix_matches_algorithm(
             "default:extra:global:p100x60:bucket",

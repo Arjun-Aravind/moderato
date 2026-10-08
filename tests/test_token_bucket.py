@@ -4,17 +4,177 @@ Tests for Token Bucket rate limiting algorithm.
 
 import asyncio
 import math
+import random
+from fractions import Fraction
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from moderato import RateLimitExceeded
+from moderato.utils import generate_key
 from tests.conftest import sleep_past_window_boundary
+
+
+@pytest.fixture
+def token_clock(redis_client):
+    """Execute the actual script with deterministic TIME; TTL stays real."""
+    source = (Path(__file__).parents[1] / "moderato/scripts/token_bucket.lua").read_text()
+    key = f"test:token-clock:{uuid4().hex}"
+    base_ms = 2_000_000_000_000
+
+    async def check(elapsed_ms, cost=1000, capacity=1000, window_seconds=3600):
+        now = base_ms + elapsed_ms
+        assert source.count("redis.call('TIME')") == 1
+        script = source.replace(
+            "redis.call('TIME')", f"{{'{now // 1000}', '{(now % 1000) * 1000}'}}"
+        )
+        return await redis_client.eval(
+            script, 1, key, capacity, capacity / window_seconds, window_seconds, cost
+        )
+
+    return check, key, base_ms
 
 
 @pytest.mark.asyncio
 class TestTokenBucket:
     """Test suite for Token Bucket algorithm."""
+
+    async def test_versioned_keys_isolate_legacy_writers(self, clean_limiter, redis_client):
+        identity = f"rolling-{uuid4().hex}"
+        legacy_key = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p2x3600", "bucket"
+        )
+        now_ms = await clean_limiter.backend.get_redis_time_ms()
+        await redis_client.hset(legacy_key, mapping={"tokens": 0, "last_refill_ms": now_ms})
+        await redis_client.expire(legacy_key, 7260)
+        legacy_before = await redis_client.hgetall(legacy_key)
+
+        result = await clean_limiter.check_with_info(
+            key=identity, rate="2/hour", algorithm="token_bucket"
+        )
+        assert result.allowed
+        assert result.remaining == 1
+        assert await redis_client.hgetall(legacy_key) == legacy_before
+        versioned_key = f"{legacy_key}:v2"
+        assert await redis_client.exists(versioned_key)
+
+        # Simulate an old writer moving its timestamp. New usage/admission
+        # must still read only the versioned hash, not the legacy state.
+        await redis_client.hset(legacy_key, mapping={"tokens": 2000, "last_refill_ms": now_ms})
+        legacy_after = await redis_client.hgetall(legacy_key)
+        usage = await clean_limiter.get_usage(key=identity, rate="2/hour", algorithm="token_bucket")
+        assert usage["remaining"] == 1
+        assert await clean_limiter.check(key=identity, rate="2/hour", algorithm="token_bucket")
+        assert not (
+            await clean_limiter.check_with_info(
+                key=identity, rate="2/hour", algorithm="token_bucket"
+            )
+        ).allowed
+        assert await redis_client.hgetall(legacy_key) == legacy_after
+
+    @pytest.mark.parametrize("tenant_type", [None, "default"])
+    async def test_reset_finds_versioned_token_keys(self, clean_limiter, redis_client, tenant_type):
+        identity = f"version-reset-{uuid4().hex}"
+        token_key = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p1x3600", "bucket:v2"
+        )
+        unrelated = generate_key(
+            clean_limiter.config.key_prefix, identity, "default", "p1x3600", "bucket:v3"
+        )
+        await redis_client.hset(token_key, mapping={"tokens": 0, "last_refill_ms": 1})
+        await redis_client.set(unrelated, "keep")
+        await clean_limiter.check(key=identity, rate="1/hour", algorithm="fixed_window")
+        assert await clean_limiter.reset(
+            identity, algorithm="token_bucket", tenant_type=tenant_type
+        )
+        assert not await redis_client.exists(token_key)
+        assert await redis_client.get(unrelated) == "keep"
+        assert (await clean_limiter.get_usage(key=identity, rate="1/hour"))["current"] == 1
+
+    async def test_polling_preserves_fractional_refill(self, token_clock):
+        check, _, _ = token_clock
+        assert (await check(0))[0] == 1
+        for elapsed_ms in range(5000, 3_600_000, 5000):
+            assert (await check(elapsed_ms))[0] == 0
+        # Independent capacity/window calculation: exactly one request/hour.
+        assert (await check(3_600_000))[:2] == [1, 0]
+
+    async def test_uninterrupted_refill_and_capacity_cap(self, token_clock):
+        check, _, _ = token_clock
+        assert (await check(0))[:2] == [1, 0]
+        assert (await check(3_600_000))[:2] == [1, 0]
+        assert (await check(10_800_000))[:2] == [1, 0]
+        assert (await check(10_800_000))[0] == 0
+
+    async def test_full_bucket_discards_idle_fraction(self, token_clock, redis_client):
+        check, key, base_ms = token_clock
+        # Full-state boundary fixture; integer public costs, no claim that
+        # every normal request history reaches this particular hash state.
+        await redis_client.hset(key, mapping={"tokens": 1000, "last_refill_ms": base_ms})
+        depletion = await check(3000)
+        assert depletion[:2] == [1, 0]
+        # 3597 seconds since depletion yields only 999.166... scaled units.
+        assert (await check(3_600_000))[0] == 0
+        assert (await check(3_603_000))[:2] == [1, 0]
+        assert depletion[3] == base_ms // 1000 + 3603
+
+    async def test_refill_survives_partial_consumption(self, token_clock):
+        check, _, _ = token_clock
+        assert (await check(0))[0] == 1
+        # Low-level scaled costs exercise remainder across admissions too.
+        assert (await check(5000, cost=1))[:2] == [1, 0]
+        assert (await check(3_600_000, cost=999))[:2] == [1, 0]
+        assert (await check(3_600_000, cost=1))[0] == 0
+
+    async def test_usage_does_not_credit_refill_twice(
+        self, clean_limiter, redis_client, monkeypatch
+    ):
+        key = f"refill-usage-{uuid4().hex}"
+        await clean_limiter.check(key=key, rate="2/hour", algorithm="token_bucket", cost=2)
+        keys = [
+            key
+            async for key in clean_limiter.backend.iter_keys(f"{clean_limiter.config.key_prefix}:*")
+        ]
+        assert len(keys) == 1
+        origin_ms = 2_000_000_000_000
+        await redis_client.hset(
+            keys[0],
+            mapping={"tokens": 1000, "last_refill_ms": origin_ms, "refill_units": 1000},
+        )
+
+        async def half_hour_later():
+            return origin_ms // 1000 + 1800, 0
+
+        monkeypatch.setattr(clean_limiter.backend, "get_redis_time", half_hour_later)
+        usage = await clean_limiter.get_usage(key=key, rate="2/hour", algorithm="token_bucket")
+        # The 1000 units accrued over this half hour are already in tokens.
+        assert usage["tokens"] == 1
+        assert usage["remaining"] == 1
+
+    @pytest.mark.parametrize("window_seconds", [1, 3, 7, 60, 3600, 86400])
+    async def test_refill_matches_rational_model(self, token_clock, window_seconds):
+        check, _, _ = token_clock
+        rng = random.Random(40406392)
+        capacity = 11000
+        balance = Fraction(capacity)
+        elapsed_ms = 0
+        for _ in range(200):
+            gap = rng.choice([0, 1, 999, 5000, window_seconds * 1000, 999_999])
+            elapsed_ms += gap
+            balance = min(capacity, balance + Fraction(capacity * gap, window_seconds * 1000))
+            cost = rng.choice([1, 1000, 3000, capacity])
+            allowed = balance >= cost
+            if allowed:
+                balance -= cost
+            actual = await check(elapsed_ms, cost, capacity, window_seconds)
+            assert actual[:2] == [int(allowed), int(balance) if allowed else 0], (
+                window_seconds,
+                elapsed_ms,
+                cost,
+                balance,
+                actual,
+            )
 
     async def test_time_is_read_inside_lua(self, clean_limiter, monkeypatch):
         async def unexpected_time_call():

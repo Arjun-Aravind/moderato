@@ -360,7 +360,8 @@ class RedisBackend:
             key: Rate limit key to check
 
         Returns:
-            Dictionary with tokens (with 1000x multiplier) and last_refill_ms timestamp
+            Dictionary with tokens (with 1000x multiplier), last_refill_ms
+            origin and refill_units already credited since that origin
 
         Raises:
             BackendError: If Redis operation fails
@@ -370,14 +371,16 @@ class RedisBackend:
 
         try:
             # Use HMGET to get bucket state (uses 'last_refill_ms' for milliseconds)
-            result = await self._redis.hmget(key, "tokens", "last_refill_ms")
+            result = await self._redis.hmget(key, "tokens", "last_refill_ms", "refill_units")
 
             tokens = int(result[0]) if result[0] else 0
             last_refill_ms = int(result[1]) if result[1] else 0
+            refill_units = int(result[2]) if result[2] else 0
 
             return {
                 "tokens": tokens,
                 "last_refill_ms": last_refill_ms,
+                "refill_units": refill_units,
             }
         except RedisError as e:
             logger.error(f"Failed to get token bucket usage for key {key}: {e}")

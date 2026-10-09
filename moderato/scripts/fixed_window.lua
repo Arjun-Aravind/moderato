@@ -47,6 +47,10 @@ local key = key_prefix .. window_start
 local current = tonumber(redis.call('GET', key)) or 0
 -- -1 marks a permanent denial; reset_at=0 is omitted by the backend.
 if cost > max_requests then
+    -- Preserve cleanup for existing counters without charging or creating state.
+    if redis.call('PTTL', key) == -1 then
+        redis.call('EXPIREAT', key, window_end)
+    end
     return {0, math.max(0, max_requests - current), -1, 0}
 end
 local allowed = 0

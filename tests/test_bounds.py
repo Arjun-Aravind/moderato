@@ -76,6 +76,59 @@ async def test_oversized_request_is_permanent_without_consumption(frozen_limiter
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("missing_expiry", [False, True])
+async def test_oversized_fixed_window_repairs_only_missing_expiry(
+    frozen_limiter, redis_client, missing_expiry
+):
+    kwargs = {"key": uuid4().hex, "rate": "10/day", "algorithm": "fixed_window"}
+    assert (await frozen_limiter.check_with_info(**kwargs, cost=8)).allowed
+    backend = frozen_limiter.backend
+    keys = [key async for key in backend.iter_keys(f"{frozen_limiter.config.key_prefix}:*")]
+    assert len(keys) == 1
+    key = keys[0]
+    if missing_expiry:
+        await redis_client.persist(key)
+    else:
+        # A valid short expiry must not be stretched to the window boundary.
+        await redis_client.expire(key, 60)
+    denied = await frozen_limiter.check_with_info(**kwargs, cost=11)
+    assert not denied.allowed and denied.remaining == 2
+    assert denied.retry_after is None and denied.reset_at is None
+    assert int(await redis_client.get(key)) == 8000
+    ttl = await redis_client.ttl(key)
+    if missing_expiry:
+        frozen_seconds, _ = await backend.get_redis_time()
+        window_end = (frozen_seconds // 86400 + 1) * 86400
+        real_seconds, _ = await redis_client.time()
+        assert window_end - real_seconds - 1 <= ttl <= window_end - real_seconds
+    else:
+        assert 0 < ttl <= 60
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry,status", [(None, 422), (7, 429)])
+async def test_exception_headers_omit_reset_only_for_permanent_denials(retry, status):
+    app = FastAPI()
+    app.add_middleware(RateLimitHeadersMiddleware)
+
+    @app.get("/")
+    async def endpoint():
+        raise RateLimitExceeded(retry, "10/day", reset_at=2_000_000_000)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+    assert response.status_code == status
+    if retry is None:
+        assert "retry-after" not in response.headers
+        assert "x-ratelimit-reset" not in response.headers
+    else:
+        assert response.headers["retry-after"] == "7"
+        assert response.headers["x-ratelimit-reset"] == "2000000000"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("algorithm", ["fixed_window", "token_bucket", "sliding_window"])
 async def test_dynamic_oversized_cost_is_422_then_smaller_cost_runs(frozen_limiter, algorithm):
     app = FastAPI()
@@ -178,8 +231,8 @@ async def test_example_handlers_support_permanent_and_temporary_denials(module, 
 @pytest.mark.parametrize("raises", [False, True])
 async def test_asgi_middleware_permanent_denial(raises):
     check = AsyncMock(
-        side_effect=RateLimitExceeded(None, "10/day") if raises else None,
-        return_value=CheckResult(False, 10, 10, None, 86400),
+        side_effect=RateLimitExceeded(None, "10/day", reset_at=2_000_000_000) if raises else None,
+        return_value=CheckResult(False, 10, 10, None, 86400, reset_at=2_000_000_000),
     )
     app = FastAPI()
     app.add_middleware(

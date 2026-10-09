@@ -435,18 +435,20 @@ try:
     await limiter.check(key="user:123", rate="100/minute")
     # Request allowed
 except RateLimitExceeded as e:
-    if e.retry_after is None:
-        print("This cost cannot fit the policy; reduce it or change the policy")
-    else:
-        print(f"Retry after {e.retry_after} seconds")
+    # Cost defaults to 1, so this denial is temporary.
+    print(f"Retry after {e.retry_after} seconds")
 
 # Decision check: always returns CheckResult, including a denied decision.
 decision = await limiter.check_with_info(key="user:123", rate="100/minute")
 if not decision.allowed:
-    if decision.retry_after is None:
-        print("Permanent denial: cost exceeds capacity")
-    else:
-        print(f"Retry after {decision.retry_after} seconds at {decision.reset_at}")
+    print(f"Retry after {decision.retry_after} seconds at {decision.reset_at}")
+
+# An oversized per-request cost is permanently denied without consuming quota.
+decision = await limiter.check_with_info(key="user:123", rate="100/minute", cost=101)
+assert not decision.allowed
+assert decision.retry_after is None and decision.reset_at is None
+print("Permanent denial: reduce the cost or change the policy; waiting cannot help")
+# check(..., cost=101) instead raises RateLimitExceeded with the same None metadata.
 
 # Get usage statistics
 usage = await limiter.get_usage(key="user:123", rate="100/minute")

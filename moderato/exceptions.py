@@ -41,7 +41,7 @@ class RateLimitExceeded(RateLimitError):
         self.retry_after = retry_after
         self.limit = limit
         self.remaining = remaining
-        self.reset_at = reset_at
+        self.reset_at = None if retry_after is None else reset_at
         self.status_code = 422 if retry_after is None else 429
 
         if message is None:

@@ -437,8 +437,8 @@ class RateLimitMiddleware:
         ]
         if retry_after is not None:
             headers.append((b"retry-after", str(retry_after).encode()))
-        if reset_at is not None:
-            headers.append((b"x-ratelimit-reset", str(reset_at).encode()))
+            if reset_at is not None:
+                headers.append((b"x-ratelimit-reset", str(reset_at).encode()))
 
         await send(
             {

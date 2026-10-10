@@ -373,6 +373,7 @@ cost above capacity is a **permanent denial**, not a configuration failure.
 HTTP integrations return **422**, omit `Retry-After` and `X-RateLimit-Reset`,
 and return `retry_after: null` in JSON. Smaller requests can still use the
 uncharged quota. Temporary quota exhaustion remains **429** with retry hints.
+The default Moderato 422 body uses `error`; FastAPI's request-validation 422 body uses `detail`.
 
 The public rate range is **1 through 9,007,199,254** requests per second,
 minute, hour, or day. The ceiling keeps scaled capacity × permille weight

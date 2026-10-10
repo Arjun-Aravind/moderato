@@ -1,6 +1,8 @@
 """Numeric-domain and permanent-denial contract regressions."""
 
 import importlib
+import math
+from fractions import Fraction
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -254,12 +256,39 @@ async def test_asgi_middleware_permanent_denial(raises):
 
 
 @pytest.mark.asyncio
-async def test_long_lived_token_refill_origin_is_bounded(redis_client):
-    source = (Path(__file__).parents[1] / "moderato/scripts/token_bucket.lua").read_text()
-    key = f"bounds:{uuid4().hex}"
+@pytest.mark.parametrize(
+    "period,window_seconds", [("second", 1), ("minute", 60), ("hour", 3600), ("day", 86400)]
+)
+@pytest.mark.parametrize("execution", ["evalsha", "eval"])
+async def test_long_lived_token_refill_origin_is_bounded(
+    clean_limiter, redis_client, monkeypatch, period, window_seconds, execution
+):
+    backend = clean_limiter.backend
     capacity = 9007199254000
     origin = 2_000_000_000_000
-    previous_elapsed = 1000 * 60000
+    window_ms = window_seconds * 1000
+    now = origin + 1000 * window_ms + 9
+    source = backend._scripts["token_bucket"]
+    monkeypatch.setitem(
+        backend._scripts,
+        "token_bucket",
+        source.replace("redis.call('TIME')", f"{{'{now // 1000}', '{now % 1000 * 1000}'}}"),
+    )
+    await backend._register_scripts()
+    if execution == "eval":
+        monkeypatch.delitem(backend._script_shas, "token_bucket")
+
+    kwargs = {
+        "key": uuid4().hex,
+        "rate": f"9007199254/{period}",
+        "algorithm": "token_bucket",
+    }
+    assert (await clean_limiter.check_with_info(**kwargs)).allowed
+    keys = [key async for key in backend.iter_keys(f"{clean_limiter.config.key_prefix}:*")]
+    assert len(keys) == 1
+    key = keys[0]
+    # A continuously busy bucket has consumed 1000 windows of refill without
+    # saturating. Seed that history, then exercise the public serialization path.
     await redis_client.hset(
         key,
         mapping={
@@ -268,14 +297,17 @@ async def test_long_lived_token_refill_origin_is_bounded(redis_client):
             "refill_units": capacity * 1000,
         },
     )
-    # This represents a continuously busy bucket: repeated refills have
-    # been consumed without ever reaching full capacity and resetting origin.
-    now = origin + previous_elapsed + 1
-    script = source.replace("redis.call('TIME')", f"{{'{now // 1000}', '{now % 1000 * 1000}'}}")
-    result = await redis_client.eval(script, 1, key, capacity, capacity / 60, 60, 1000)
-    expected = capacity // 2 + capacity // 60000 - 1000
-    assert result[:2] == [1, expected]
-    fields = await redis_client.hgetall(key)
-    assert int(fields["refill_units"]) < capacity
-    assert int(fields["tokens"]) == expected
-    assert int(fields["last_refill_ms"]) == origin + previous_elapsed
+    # Independent rational accounting retains the fraction after nine ms.
+    balance = Fraction(capacity // 2) + Fraction(capacity * 9, window_ms) - 1000
+    recovery_ms = math.ceil((capacity - balance) * window_ms / capacity)
+    result = await clean_limiter.check_with_info(**kwargs)
+    assert result.allowed and result.remaining == int(balance) // 1000
+    assert result.retry_after == 0
+    assert result.reset_at == math.ceil(Fraction(now + recovery_ms, 1000))
+
+    # The same-time full-capacity request is denied without consuming balance.
+    denied = await clean_limiter.check_with_info(**kwargs, cost=9007199254)
+    retry_seconds = math.ceil(Fraction(recovery_ms, 1000))
+    assert not denied.allowed and denied.remaining == result.remaining
+    assert denied.retry_after == retry_seconds
+    assert denied.reset_at == math.ceil(Fraction(now, 1000)) + retry_seconds

@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Awaitable
 from types import TracebackType
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, Callable, Optional, TypeVar, Union
 
 from .backends.redis import RedisBackend, _redact_redis_url
 from .exceptions import RateLimitConfigError, RateLimitExceeded
@@ -335,7 +335,9 @@ class RateLimiter:
 
         # Use integer math (multiply by 1000 for precision)
         max_requests = requests * 1000
-        cost_with_multiplier = cost * 1000
+        # Every cost above capacity has the same permanent-denial decision.
+        # Do not send arbitrarily large Python integers into Lua's doubles.
+        cost_with_multiplier = min(cost, requests + 1) * 1000
 
         # Every script reads Redis TIME itself, so each decision is one
         # round trip and windows are never selected from a stale clock read.
@@ -404,7 +406,9 @@ class RateLimiter:
 
         remaining_requests = result.remaining // 1000
         retry_after_seconds = (
-            max(1, (result.retry_after + 999) // 1000) if not result.allowed else 0
+            None
+            if result.retry_after == -1
+            else (max(1, (result.retry_after + 999) // 1000) if not result.allowed else 0)
         )
 
         reset_at = result.reset_at
@@ -438,7 +442,7 @@ class RateLimiter:
         key: Optional[Callable[..., str]] = None,
         tenant_type: Optional[Callable[..., str]] = None,
         algorithm: Optional[str] = None,
-        cost: Optional[Callable[..., int]] = None,
+        cost: Optional[Union[int, Callable[..., int]]] = None,
         trust_proxy_headers: bool = False,
         scope: Optional[str] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -454,7 +458,8 @@ class RateLimiter:
                  If not provided, uses request.client.host (IP address)
             tenant_type: Optional function to extract tenant type from request
             algorithm: Algorithm to use (defaults to config.default_algorithm)
-            cost: Optional function to calculate request cost
+            cost: Positive integer cost or callback computing it per request.
+                Static costs above capacity fail at decoration time
             trust_proxy_headers: If True, trust X-Forwarded-For headers for IP.
                                Only enable if behind a trusted reverse proxy.
             scope: Shared bucket name. By default, each route and method is isolated.
@@ -649,12 +654,17 @@ class RateLimiter:
             >>> print(usage)
             {'tokens': 58, 'limit': 100, 'remaining': 58, 'ttl': 120}
         """
-        if not self._connected:
-            await self.connect()
-
-        requests, window_seconds = parse_rate(rate)
+        try:
+            requests, window_seconds = parse_rate(rate)
+        except ValueError as e:
+            raise RateLimitConfigError(f"Invalid rate format: {e}") from e
         tenant_type = tenant_type or "default"
         algorithm = algorithm or self.config.default_algorithm
+        if algorithm not in ["fixed_window", "token_bucket", "sliding_window"]:
+            raise RateLimitConfigError(f"Unknown algorithm: {algorithm}")
+
+        if not self._connected:
+            await self.connect()
 
         # Use Redis server time for consistency
         redis_time_seconds, redis_time_us = await self.backend.get_redis_time()
@@ -743,12 +753,11 @@ class RateLimiter:
 
         # Only add units not already credited since the stored refill origin.
         max_tokens = max_requests * 1000
-        refill_rate_per_second = max_tokens / window_seconds
 
         if last_refill_ms > 0:
             current_time_ms = redis_time_seconds * 1000 + redis_time_us // 1000
             time_elapsed_ms = max(0, current_time_ms - last_refill_ms)
-            accrued_units = int((refill_rate_per_second * time_elapsed_ms) / 1000)
+            accrued_units = (max_tokens * time_elapsed_ms) // (window_seconds * 1000)
             tokens_to_add = max(0, accrued_units - refill_units)
             current_tokens = min(max_tokens, stored_tokens + tokens_to_add)
         else:

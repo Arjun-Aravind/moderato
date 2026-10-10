@@ -87,12 +87,13 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     headers = {
         "X-RateLimit-Limit": exc.limit,
         "X-RateLimit-Remaining": str(exc.remaining),
-        "Retry-After": str(exc.retry_after),
     }
+    if exc.retry_after is not None:
+        headers["Retry-After"] = str(exc.retry_after)
     if exc.reset_at is not None:
         headers["X-RateLimit-Reset"] = str(exc.reset_at)
     return JSONResponse(
-        status_code=429,
+        status_code=exc.status_code,
         content={
             "error": "Rate limit exceeded",
             "message": f"Your tier's limit ({exc.limit}) has been exceeded",

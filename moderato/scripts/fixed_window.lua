@@ -21,12 +21,15 @@ if cost_arg then
     cost = tonumber(cost_arg)
 end
 
-if window_seconds == nil or window_seconds <= 0 or window_seconds ~= math.floor(window_seconds) then
-    return redis.error_reply("window_seconds must be a positive integer")
+if max_requests == nil or max_requests <= 0 or max_requests > 9007199254000 or max_requests ~= math.floor(max_requests) then
+    return redis.error_reply("capacity must be a positive integer no greater than 9007199254000")
+end
+if window_seconds == nil or window_seconds <= 0 or window_seconds > 86400 or window_seconds ~= math.floor(window_seconds) then
+    return redis.error_reply("window_seconds must be a positive integer no greater than 86400")
 end
 
 -- Defense in depth: request cost must consume capacity
-if cost == nil or cost <= 0 or cost ~= math.floor(cost) then
+if cost == nil or cost <= 0 or cost == math.huge or cost ~= math.floor(cost) then
     return redis.error_reply("cost must be a positive integer")
 end
 
@@ -42,6 +45,14 @@ local key = key_prefix .. window_start
 -- Read, decide, and increment within this atomic script. Rejected requests
 -- must not consume capacity that a smaller request could still use.
 local current = tonumber(redis.call('GET', key)) or 0
+-- -1 marks a permanent denial; reset_at=0 is omitted by the backend.
+if cost > max_requests then
+    -- Preserve cleanup for existing counters without charging or creating state.
+    if redis.call('PTTL', key) == -1 then
+        redis.call('EXPIREAT', key, window_end)
+    end
+    return {0, math.max(0, max_requests - current), -1, 0}
+end
 local allowed = 0
 if current + cost <= max_requests then
     current = redis.call('INCRBY', key, cost)

@@ -21,7 +21,7 @@ class RateLimitExceeded(RateLimitError):
 
     def __init__(
         self,
-        retry_after: int,
+        retry_after: Optional[int],
         limit: str,
         remaining: int = 0,
         message: Optional[str] = None,
@@ -32,7 +32,7 @@ class RateLimitExceeded(RateLimitError):
         Initialize RateLimitExceeded exception.
 
         Args:
-            retry_after: Seconds until the rate limit resets
+            retry_after: Seconds until recovery, or None if cost exceeds capacity
             limit: The rate limit that was exceeded (e.g., "100/minute")
             remaining: Number of requests remaining in the current window
             message: Optional custom error message
@@ -41,10 +41,16 @@ class RateLimitExceeded(RateLimitError):
         self.retry_after = retry_after
         self.limit = limit
         self.remaining = remaining
-        self.reset_at = reset_at
+        self.reset_at = None if retry_after is None else reset_at
+        self.status_code = 422 if retry_after is None else 429
 
         if message is None:
-            message = f"Rate limit exceeded ({limit}). Retry after {retry_after} seconds."
+            if retry_after is None:
+                message = (
+                    f"Request cost exceeds rate limit capacity ({limit}); retrying cannot help."
+                )
+            else:
+                message = f"Rate limit exceeded ({limit}). Retry after {retry_after} seconds."
 
         super().__init__(message)
 

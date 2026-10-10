@@ -9,6 +9,10 @@ from typing import Optional
 # Components longer than this are replaced by a SHA-256 digest.
 KEY_COMPONENT_MAX_LENGTH = 100
 
+# Capacity is scaled by 1000; sliding weighting multiplies it by another
+# 1000. Keep that largest integer product within Lua's exact double range.
+MAX_REQUESTS = (2**53 - 1) // 1_000_000
+
 
 def parse_rate(rate_string: str) -> tuple[int, int]:
     """
@@ -35,6 +39,9 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
         >>> parse_rate("1000/hour")
         (1000, 3600)
     """
+    if not isinstance(rate_string, str):
+        raise ValueError("Rate must be a string in 'number/period' format")
+
     # Normalize input
     rate_string = rate_string.strip().lower()
 
@@ -55,6 +62,8 @@ def parse_rate(rate_string: str) -> tuple[int, int]:
         raise ValueError(
             f"Invalid rate string: '{rate_string}'. " f"The request limit must be at least 1."
         )
+    if requests > MAX_REQUESTS:
+        raise ValueError(f"The request limit must not exceed {MAX_REQUESTS}")
 
     # Normalize period to singular form
     period = period.rstrip("s")

@@ -28,8 +28,10 @@ async def lifespan(app: FastAPI):
     await limiter.connect()
     print("Connected to Redis")
     print(f"Loaded {len(TENANT_DATABASE)} tenants")
-    yield
-    await limiter.close()
+    try:
+        yield
+    finally:
+        await limiter.close()
 
 
 app = FastAPI(

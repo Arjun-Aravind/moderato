@@ -77,8 +77,10 @@ limiter = RateLimiter(redis_url="redis://localhost:6379")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await limiter.connect()
-    yield
-    await limiter.close()
+    try:
+        yield
+    finally:
+        await limiter.close()
 
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(RateLimitHeadersMiddleware)

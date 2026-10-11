@@ -61,7 +61,8 @@ async def redis_client(redis_url: str) -> AsyncGenerator[redis.Redis, None]:
 
     # Clean up after test
     await client.flushdb()
-    await client.aclose()
+    close = getattr(client, "aclose", None) or client.close
+    await close()
 
 
 @pytest.fixture
@@ -131,7 +132,10 @@ async def clean_limiter(redis_url: str) -> AsyncGenerator[RateLimiter, None]:
     # Generate unique prefix for this test
     test_id = str(uuid.uuid4())[:8]
 
+    # Atomicity tests launch up to 1,000 simultaneous checks. Give them enough
+    # pool capacity so they test quota decisions, not redis-py pool exhaustion.
     limiter = RateLimiter(redis_url=redis_url, key_prefix=f"test:{test_id}:ratelimit")
+    limiter.config.max_connections = 1000
 
     await limiter.connect()
     yield limiter

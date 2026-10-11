@@ -182,10 +182,9 @@ class RateLimiter:
         This method is idempotent and thread-safe.
         """
         async with self._lock:
-            if self._connected:
-                await self.backend.close()
-                self._connected = False
-                logger.info("RateLimiter disconnected from Redis")
+            await self.backend.close()
+            self._connected = False
+            logger.info("RateLimiter disconnected from Redis")
 
     async def _run_backend_operation(self, operation: str, awaitable: Awaitable[T]) -> T:
         if self.metrics is None:

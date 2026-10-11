@@ -18,6 +18,36 @@ from moderato.limiter import _suffix_matches_algorithm
 from moderato.utils import generate_key
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("module_name", ["examples.fastapi_app", "examples.multi_tenant"])
+@pytest.mark.parametrize("exceptional", [False, True])
+async def test_example_lifespan_closes_on_exit(monkeypatch, redis_url, module_name, exceptional):
+    """Example cleanup must run even when the lifespan body raises."""
+    from importlib import import_module
+
+    pytest.importorskip("fastapi")
+    pytest.importorskip("uvicorn")
+    module = import_module(module_name)
+    limiter = RateLimiter(redis_url=redis_url)
+    monkeypatch.setattr(module, "limiter", limiter)
+
+    async def run():
+        async with module.lifespan(module.app):
+            assert await limiter.health_check()
+            if exceptional:
+                raise RuntimeError("lifespan body failed")
+
+    try:
+        if exceptional:
+            with pytest.raises(RuntimeError, match="lifespan body failed"):
+                await run()
+        else:
+            await run()
+        assert not await limiter.health_check()
+    finally:
+        await limiter.close()
+
+
 class TestKeyCollisionPrevention:
     """
     Tests for key collision prevention (NEW-C9 fix).
@@ -298,6 +328,93 @@ class TestProxyHeaderSecurity:
 
 class TestMiddlewareProxySecurity:
     """Tests for ASGI middleware proxy header handling."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "header", [b"x-forwarded-for", b"X-Forwarded-For", b"x-real-ip", b"X-Real-IP"]
+    )
+    @pytest.mark.parametrize("trust", [False, True])
+    async def test_raw_scope_quota_identity(self, redis_url, header, trust):
+        """Trusted casing shares origin quota; spoofing cannot evade peer quota."""
+        limiter = RateLimiter(redis_url=redis_url, key_prefix=f"scope-{uuid4().hex}")
+        await limiter.connect()
+        try:
+
+            async def app(scope, receive, send):
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"OK"})
+
+            middleware = RateLimitMiddleware(
+                app, limiter, default_rate="1/hour", trust_proxy_headers=trust
+            )
+
+            async def request(peer, name, origin):
+                messages = []
+
+                async def receive():
+                    return {"type": "http.request", "body": b"", "more_body": False}
+
+                async def send(message):
+                    messages.append(message)
+
+                await middleware(
+                    {
+                        "type": "http",
+                        "asgi": {"version": "3.0"},
+                        "http_version": "1.1",
+                        "method": "GET",
+                        "scheme": "http",
+                        "path": "/api/test",
+                        "raw_path": b"/api/test",
+                        "query_string": b"",
+                        "server": ("localhost", 80),
+                        "client": peer,
+                        "headers": [(name, origin)],
+                    },
+                    receive,
+                    send,
+                )
+                return messages[0]["status"]
+
+            assert await request(("192.0.2.1", 1234), header, b"203.0.113.1") == 200
+            peer = ("192.0.2.2", 5678) if trust else ("192.0.2.1", 5678)
+            origin = b"203.0.113.1" if trust else b"203.0.113.2"
+            assert await request(peer, header.swapcase(), origin) == 429
+            if trust:
+                assert await request(peer, header.lower(), b"203.0.113.2") == 200
+        finally:
+            await limiter.close()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("trust", [False, True])
+    async def test_missing_client_shares_unknown_quota(self, redis_url, trust):
+        limiter = RateLimiter(redis_url=redis_url, key_prefix=f"unknown-{uuid4().hex}")
+        await limiter.connect()
+        try:
+
+            async def app(scope, receive, send):
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+                await send({"type": "http.response.body", "body": b"OK"})
+
+            middleware = RateLimitMiddleware(
+                app, limiter, default_rate="1/hour", trust_proxy_headers=trust
+            )
+            statuses = []
+
+            async def receive():
+                return {"type": "http.request", "body": b""}
+
+            async def send(message):
+                if message["type"] == "http.response.start":
+                    statuses.append(message["status"])
+
+            scope = {"type": "http", "path": "/api/test", "headers": [], "client": None}
+            await middleware(scope, receive, send)
+            scope.pop("client")
+            await middleware(scope, receive, send)
+            assert statuses == [200, 429]
+        finally:
+            await limiter.close()
 
     @pytest.mark.asyncio
     async def test_middleware_default_no_trust(self, redis_url):

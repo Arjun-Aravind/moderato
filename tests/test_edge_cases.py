@@ -14,9 +14,11 @@ import time
 from uuid import uuid4
 
 import pytest
+import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from moderato import RateLimiter, RateLimitExceeded
-from moderato.exceptions import RateLimitConfigError
+from moderato.exceptions import BackendError, RateLimitConfigError
 from moderato.models import CheckResult
 from moderato.utils import _url_encode_key_component
 from tests.conftest import raw_key_ttl
@@ -160,6 +162,60 @@ class TestExtremeValues:
 @pytest.mark.asyncio
 class TestConnectionHandling:
     """Tests for connection handling and error recovery."""
+
+    @pytest.mark.parametrize("failure", ["connection", "unexpected", "cancelled"])
+    async def test_failed_connect_releases_connection_and_can_retry(
+        self, redis_url, redis_client, monkeypatch, failure
+    ):
+        """Even an interrupted handshake must release its live Redis connection."""
+        name = f"failed-connect-{uuid4()}"
+        from_url = redis.from_url
+        reached_ping = asyncio.Event()
+
+        def interrupted_client(*args, **kwargs):
+            client = from_url(*args, client_name=name, **kwargs)
+            ping = client.ping
+
+            async def interrupted_ping():
+                await ping()
+                reached_ping.set()
+                if failure == "cancelled":
+                    await asyncio.Event().wait()
+                if failure == "connection":
+                    raise RedisConnectionError("interrupted handshake")
+                raise RuntimeError("interrupted handshake")
+
+            monkeypatch.setattr(client, "ping", interrupted_ping)
+            return client
+
+        limiter = RateLimiter(redis_url=redis_url)
+        monkeypatch.setattr(redis, "from_url", interrupted_client)
+        task = asyncio.create_task(limiter.connect())
+        try:
+            await asyncio.wait_for(reached_ping.wait(), timeout=5)
+            if failure == "cancelled":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                with pytest.raises(BackendError, match="interrupted handshake"):
+                    await task
+            assert not await limiter.health_check()
+            assert not any(c["name"] == name for c in await redis_client.client_list())
+            await limiter.close()
+            await limiter.close()
+            monkeypatch.setattr(redis, "from_url", from_url)
+            await limiter.connect()
+            assert await limiter.health_check()
+            assert await limiter.check(key=name, rate="1/hour")
+        finally:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            await limiter.close()
 
     async def test_redis_connection_failure(self):
         """Test proper error on bad Redis connection."""

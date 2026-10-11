@@ -29,12 +29,16 @@ jobs:
           cz check --rev-range origin/${{ github.base_ref }}..HEAD
 
   test:
-    name: Test Python ${{ matrix.python-version }}
+    name: Test Python ${{ matrix.python-version }} (Redis ${{ matrix.redis-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        redis-version: [locked]
+        include:
+          - python-version: "3.12"
+            redis-version: "5.0.0"
 
     services:
       redis:
@@ -75,6 +79,10 @@ jobs:
 
       - name: Install project
         run: poetry install --no-interaction
+
+      - name: Install minimum supported redis-py
+        if: matrix.redis-version == '5.0.0'
+        run: poetry run pip install redis==5.0.0 && poetry run pip check
 
       - name: Run tests
         run: poetry run pytest --cov=moderato --cov-report=xml -v

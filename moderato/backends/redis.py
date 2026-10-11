@@ -116,6 +116,14 @@ class RedisBackend:
             raise BackendError(f"Failed to connect to Redis: {e}") from e
         except Exception as e:
             raise BackendError(f"Unexpected error during Redis connection: {e}") from e
+        finally:
+            # Cancellation is a BaseException: clean up without converting it to
+            # BackendError or allowing a failed handshake to retain a pool.
+            if not self._connected:
+                try:
+                    await self.close()
+                except Exception:
+                    logger.warning("Failed to close Redis client after connection failure")
 
     async def _register_scripts(self) -> None:
         """Register Lua scripts with Redis for optimal performance."""
@@ -134,9 +142,13 @@ class RedisBackend:
 
     async def close(self) -> None:
         """Close Redis connection gracefully."""
-        if self._redis and self._connected:
-            await self._redis.aclose()  # type: ignore[attr-defined]
+        if self._redis is not None:
+            # redis-py 5.0.0 exposes async close(); later 5.x prefers aclose().
+            close = getattr(self._redis, "aclose", None) or self._redis.close
+            await close()
+            self._redis = None
             self._connected = False
+            self._script_shas.clear()
             logger.info("Closed Redis connection")
 
     async def check_fixed_window(

@@ -227,18 +227,31 @@ class TestPasswordRedaction:
         assert "[REDACTED]" in redacted
         assert "localhost" in redacted
 
-    def test_password_not_in_init_log(self, caplog):
+    @pytest.mark.parametrize(
+        "redis_url",
+        [
+            "redis://user:mysecretpassword@localhost:6379",
+            "redis://localhost:6379?db=1&pass%77ord=mysecretpassword&socket_timeout=2",
+            "redis://localhost:6379?%70%77%64=mysecretpassword",
+            "redis://localhost:6379?password=mysecretpassword&pass%77ord=mysecretpassword",
+        ],
+    )
+    def test_password_not_in_init_log(self, caplog, redis_url):
         """RateLimiter initialization must not expose Redis passwords in debug logs."""
         import logging
 
         from moderato import RateLimiter
 
         caplog.set_level(logging.DEBUG, logger="moderato.limiter")
-        RateLimiter(redis_url="redis://user:mysecretpassword@localhost:6379")
+        RateLimiter(redis_url=redis_url)
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
         assert "mysecretpassword" not in log_text
         assert "[REDACTED]" in log_text
+        assert "localhost:6379" in log_text
+        if "db=1" in redis_url:
+            assert "db=1" in log_text
+            assert "socket_timeout=2" in log_text
 
 
 class TestProxyHeaderSecurity:

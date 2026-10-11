@@ -722,10 +722,12 @@ def _redact_redis_url(url: str) -> str:
 def _redact_query_passwords(url: str) -> str:
     """Redact credential-bearing query parameters (e.g. ?password=secret)."""
     import re
+    from urllib.parse import unquote_plus
 
-    return re.sub(
-        r"([?&])(?:password|pwd)=([^&]*)",
-        r"\1password=[REDACTED]",
-        url,
-        flags=re.IGNORECASE,
-    )
+    def redact_parameter(match: re.Match[str]) -> str:
+        # redis-py decodes query names before interpreting connection options.
+        if unquote_plus(match.group(2)).lower() in ("password", "pwd"):
+            return f"{match.group(1)}password=[REDACTED]"
+        return match.group(0)
+
+    return re.sub(r"([?&])([^=&]+)=([^&]*)", redact_parameter, url)

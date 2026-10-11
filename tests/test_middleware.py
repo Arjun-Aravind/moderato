@@ -10,8 +10,45 @@ import redis as sync_redis
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from moderato import RateLimiter, RateLimitHeadersMiddleware
+from moderato import BackendError, RateLimiter, RateLimitHeadersMiddleware
 from moderato.models import CheckResult
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("integration", ["decorator", "asgi"])
+async def test_backend_failure_returns_503_without_quota_headers(integration, monkeypatch):
+    import httpx
+
+    from moderato.decorators import RateLimitMiddleware
+
+    limiter = RateLimiter()
+
+    async def unavailable():
+        raise BackendError("redis://user:secret@host:6379 is unavailable")
+
+    monkeypatch.setattr(limiter, "connect", unavailable)
+    app = FastAPI()
+    if integration == "decorator":
+        app.add_middleware(RateLimitHeadersMiddleware)
+    else:
+        app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    async def endpoint(request: Request):
+        pytest.fail("Fail-closed request must not execute the endpoint")
+
+    if integration == "decorator":
+        endpoint = limiter.limit("10/day")(endpoint)
+    app.get("/")(endpoint)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+    assert response.status_code == 503
+    assert response.json() == {"error": "Rate limit backend unavailable"}
+    assert not any(name.startswith("x-ratelimit-") for name in response.headers)
+    assert "retry-after" not in response.headers
+    assert "secret" not in response.text
 
 
 @pytest.fixture

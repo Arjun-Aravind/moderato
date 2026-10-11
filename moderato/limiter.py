@@ -11,7 +11,7 @@ from types import TracebackType
 from typing import Any, Callable, Optional, TypeVar, Union
 
 from .backends.redis import RedisBackend, _redact_redis_url
-from .exceptions import RateLimitConfigError, RateLimitExceeded
+from .exceptions import BackendError, RateLimitConfigError, RateLimitExceeded
 from .models import CheckResult, RateLimitConfig
 from .utils import (
     generate_key,
@@ -101,6 +101,7 @@ class RateLimiter:
         key_prefix: str = "ratelimit",
         default_algorithm: str = "fixed_window",
         enable_metrics: bool = False,
+        fail_open: bool = False,
     ):
         """
         Initialize the rate limiter.
@@ -110,6 +111,8 @@ class RateLimiter:
             key_prefix: Prefix for all Redis keys
             default_algorithm: Default algorithm to use
             enable_metrics: Whether to enable metrics collection
+            fail_open: Allow feasible checks on BackendError (default False).
+                Automatically enables metrics and requires the metrics extra
         """
         if default_algorithm not in ("fixed_window", "token_bucket", "sliding_window"):
             raise RateLimitConfigError(f"Unknown algorithm: {default_algorithm}")
@@ -117,13 +120,14 @@ class RateLimiter:
             redis_url=redis_url,
             key_prefix=key_prefix,
             default_algorithm=default_algorithm,  # type: ignore[arg-type]
-            enable_metrics=enable_metrics,
+            enable_metrics=enable_metrics or fail_open,
+            fail_open=fail_open,
         )
         self.backend = RedisBackend(self.config)
         self._connected = False
         self._lock = asyncio.Lock()
         self.metrics: Optional[Any] = None
-        if enable_metrics:
+        if self.config.enable_metrics:
             try:
                 from .metrics import get_metrics, init_metrics
             except ModuleNotFoundError as exc:
@@ -225,12 +229,12 @@ class RateLimiter:
             scope: Namespace for independently limited resources (default "global")
 
         Returns:
-            True if request is allowed
+            True if admitted or bypassed under fail-open
 
         Raises:
             RateLimitExceeded: If rate limit is exceeded
             RateLimitConfigError: If configuration is invalid
-            BackendError: If backend operation fails
+            BackendError: If backend operation fails and the check is not bypassed
 
         Examples:
             >>> # Simple check
@@ -264,6 +268,7 @@ class RateLimiter:
             scope=scope,
         )
         if not result.allowed:
+            assert result.remaining is not None
             raise RateLimitExceeded(
                 retry_after=result.retry_after,
                 limit=rate,
@@ -299,11 +304,12 @@ class RateLimiter:
             scope: Namespace for independently limited resources (default "global")
 
         Returns:
-            CheckResult with usage information for an allowed or denied request
+            CheckResult with usage information for an allowed or denied request.
+            Fail-open bypasses have unknown remaining/retry/reset metadata (None)
 
         Raises:
             RateLimitConfigError: If configuration is invalid
-            BackendError: If backend operation fails
+            BackendError: If backend operation fails and the check is not bypassed
 
         Examples:
             >>> result = await limiter.check_with_info(key="user:123", rate="100/minute")
@@ -326,10 +332,6 @@ class RateLimiter:
 
         check_started = time.perf_counter()
 
-        # Ensure we're connected
-        if not self._connected:
-            await self.connect()
-
         tenant_type = tenant_type or "default"
         policy = _policy_component(requests, window_seconds)
 
@@ -339,70 +341,92 @@ class RateLimiter:
         # Do not send arbitrarily large Python integers into Lua's doubles.
         cost_with_multiplier = min(cost, requests + 1) * 1000
 
-        # Every script reads Redis TIME itself, so each decision is one
-        # round trip and windows are never selected from a stale clock read.
-        if algorithm == "fixed_window":
-            key_prefix = generate_key(
-                self.config.key_prefix,
-                key,
-                tenant_type,
-                policy,
-                "",
-                scope=scope,
+        try:
+            if not self._connected:
+                await self.connect()
+
+            # Every script reads Redis TIME itself, so each decision is one
+            # round trip and windows are never selected from a stale clock read.
+            if algorithm == "fixed_window":
+                key_prefix = generate_key(
+                    self.config.key_prefix,
+                    key,
+                    tenant_type,
+                    policy,
+                    "",
+                    scope=scope,
+                )
+                result = await self._run_backend_operation(
+                    "check_fixed_window",
+                    self.backend.check_fixed_window(
+                        key_prefix, max_requests, window_seconds, cost=cost_with_multiplier
+                    ),
+                )
+            elif algorithm == "token_bucket":
+                # Isolate the refill_units schema from old writers and rollbacks.
+                full_key = generate_key(
+                    self.config.key_prefix,
+                    key,
+                    tenant_type,
+                    policy,
+                    "bucket:v2",
+                    scope=scope,
+                )
+                # Use milliseconds for precision with low rates (e.g., 1/hour)
+                # refill_rate = max_requests / window_seconds (tokens per second).
+                # Keep as float: integer division would truncate low rates like
+                # 1/hour (1000 // 3600 == 0) to a bucket that never refills.
+                refill_rate_per_second = max_requests / window_seconds
+                result = await self._run_backend_operation(
+                    "check_token_bucket",
+                    self.backend.check_token_bucket(
+                        key=full_key,
+                        max_tokens=max_requests,
+                        refill_rate_per_second=refill_rate_per_second,
+                        window_seconds=window_seconds,
+                        cost=cost_with_multiplier,
+                    ),
+                )
+            elif algorithm == "sliding_window":
+                # The script appends the current and previous window starts,
+                # keeping the "<base>:sliding:<window_start>" key layout.
+                base_key = generate_key(
+                    self.config.key_prefix,
+                    key,
+                    tenant_type,
+                    policy,
+                    "sliding",
+                    scope=scope,
+                )
+                result = await self._run_backend_operation(
+                    "check_sliding_window",
+                    self.backend.check_sliding_window(
+                        f"{base_key}:",
+                        max_requests,
+                        window_seconds,
+                        cost=cost_with_multiplier,
+                    ),
+                )
+            else:
+                raise NotImplementedError(f"Algorithm {algorithm} not yet implemented")
+        except BackendError:
+            if not self.config.fail_open or cost > requests:
+                raise
+            if self.metrics is None or not self.metrics.enabled:
+                raise RateLimitConfigError("fail_open requires enabled metrics") from None
+            self.metrics.record_fail_open(algorithm)
+            self.metrics.observe_check_duration(algorithm, time.perf_counter() - check_started)
+            logger.warning(
+                "Rate limit check bypassed: backend unavailable (algorithm=%s)", algorithm
             )
-            result = await self._run_backend_operation(
-                "check_fixed_window",
-                self.backend.check_fixed_window(
-                    key_prefix, max_requests, window_seconds, cost=cost_with_multiplier
-                ),
+            return CheckResult(
+                allowed=True,
+                limit=requests,
+                remaining=None,
+                retry_after=None,
+                reset_at=None,
+                window_seconds=window_seconds,
             )
-        elif algorithm == "token_bucket":
-            # Isolate the refill_units schema from old writers and rollbacks.
-            full_key = generate_key(
-                self.config.key_prefix,
-                key,
-                tenant_type,
-                policy,
-                "bucket:v2",
-                scope=scope,
-            )
-            # Use milliseconds for precision with low rates (e.g., 1/hour)
-            # refill_rate = max_requests / window_seconds (tokens per second).
-            # Keep as float: integer division would truncate low rates like
-            # 1/hour (1000 // 3600 == 0) to a bucket that never refills.
-            refill_rate_per_second = max_requests / window_seconds
-            result = await self._run_backend_operation(
-                "check_token_bucket",
-                self.backend.check_token_bucket(
-                    key=full_key,
-                    max_tokens=max_requests,
-                    refill_rate_per_second=refill_rate_per_second,
-                    window_seconds=window_seconds,
-                    cost=cost_with_multiplier,
-                ),
-            )
-        elif algorithm == "sliding_window":
-            # The script appends the current and previous window starts,
-            # keeping the "<base>:sliding:<window_start>" key layout.
-            base_key = generate_key(
-                self.config.key_prefix,
-                key,
-                tenant_type,
-                policy,
-                "sliding",
-                scope=scope,
-            )
-            result = await self._run_backend_operation(
-                "check_sliding_window",
-                self.backend.check_sliding_window(
-                    f"{base_key}:",
-                    max_requests,
-                    window_seconds,
-                    cost=cost_with_multiplier,
-                ),
-            )
-        else:
-            raise NotImplementedError(f"Algorithm {algorithm} not yet implemented")
 
         remaining_requests = result.remaining // 1000
         retry_after_seconds = (

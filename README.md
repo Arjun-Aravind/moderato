@@ -401,7 +401,7 @@ longer get a fresh quota through premature idle expiry.
 ### Error Handling
 
 ```python
-from moderato import RateLimitCallbackError, RateLimitExceeded
+from moderato import BackendError, RateLimitCallbackError, RateLimitExceeded
 from starlette.responses import JSONResponse
 
 @app.exception_handler(RateLimitExceeded)
@@ -416,6 +416,13 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         headers={"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else {},
     )
 
+@app.exception_handler(BackendError)
+async def rate_limit_backend_handler(request: Request, exc: BackendError):
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Rate limit backend unavailable"},
+    )
+
 @app.exception_handler(RateLimitCallbackError)
 async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackError):
     return JSONResponse(
@@ -427,6 +434,48 @@ async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackEr
 Key, tenant, and cost callbacks fail closed: their exception raises
 `RateLimitCallbackError` before the endpoint runs. With
 `RateLimitHeadersMiddleware`, this becomes the same 503 response automatically.
+
+### Backend Failure Policy (planned 0.5.0)
+
+**Fail closed is the default:** `RateLimiter(fail_open=False)`. If Redis cannot
+provide a decision, manual `check()` and `check_with_info()` calls raise
+`BackendError`. `RateLimitHeadersMiddleware` and `RateLimitMiddleware` return
+**503** with `{"error": "Rate limit backend unavailable"}`, without quota or
+retry headers. This is not a confirmed quota denial: those remain 429, or
+422 when the request cost exceeds capacity.
+
+For availability-first applications, explicitly opt into fail-open:
+
+```python
+# Install: pip install 'moderato[metrics]' (or 'moderato[all]' for FastAPI).
+limiter = RateLimiter(redis_url="redis://localhost:6379", fail_open=True)
+```
+
+When a feasible check raises `BackendError`, fail-open allows it, logs a
+warning, and increments `moderato_fail_open_total{algorithm="..."}` and
+`moderato_checks_total{algorithm="...",result="bypassed"}`. Bypasses are not
+counted as confirmed `allowed` decisions. Custom metric namespaces are honored.
+Fail-open automatically enables metrics, even if `enable_metrics=False`, and
+requires the metrics extra. Disabling its collector prevents bypasses rather
+than letting uncounted requests through.
+
+`check()` returns `True` for a bypass; `check_with_info()` returns
+`allowed=True` with `remaining=None`, `retry_after=None`, and `reset_at=None`.
+The configured `limit` and `window_seconds` are still known. HTTP integrations
+omit all rate-limit headers for bypasses. Check `remaining is not None` before
+using it as a quota measurement; unknown does not mean zero or a fresh quota.
+
+Fail-open never hides invalid configuration, callback failures, or cancellation,
+and never admits costs above capacity. An oversized request during a backend
+outage still raises `BackendError` (503 in HTTP), rather than being bypassed.
+Once Redis recovers, normal admissions and denials resume automatically.
+A failed Redis command might already have updated quota before its reply was
+lost; bypasses are not replayed or retroactively charged.
+
+The setting applies only to request checks. Explicit `connect()`, context-manager
+entry, `get_usage()`, and `reset()` still surface backend failures. If an application
+must start during an outage, do not require a successful eager `connect()` in
+its startup hook; checks can connect lazily under the configured failure policy.
 
 ### Manual Checking
 

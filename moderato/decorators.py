@@ -11,7 +11,12 @@ from typing import Any, Callable, Optional, TypeVar, Union
 import anyio
 from typing_extensions import ParamSpec
 
-from .exceptions import RateLimitCallbackError, RateLimitConfigError, RateLimitExceeded
+from .exceptions import (
+    BackendError,
+    RateLimitCallbackError,
+    RateLimitConfigError,
+    RateLimitExceeded,
+)
 from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
@@ -234,8 +239,8 @@ async def _check_rate_limit(
             scope=scope,
         )
 
-        # Rate limit check passed - store usage info for headers (no extra Redis call)
-        if hasattr(request, "state"):
+        # A fail-open bypass has no backend quota metadata to advertise.
+        if hasattr(request, "state") and result.remaining is not None:
             request.state.rate_limit_info = {
                 "limit": result.limit,
                 "remaining": result.remaining,
@@ -415,6 +420,13 @@ class RateLimitMiddleware:
                 rate=self.default_rate,
                 scope="middleware",
             )
+        except BackendError:
+            from starlette.responses import JSONResponse
+
+            await JSONResponse(
+                status_code=503, content={"error": "Rate limit backend unavailable"}
+            )(scope, receive, send)
+            return
         except RateLimitExceeded as e:
             result = None
             denial: Optional[Any] = e

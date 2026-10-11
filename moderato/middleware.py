@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from .exceptions import RateLimitCallbackError, RateLimitExceeded
+from .exceptions import BackendError, RateLimitCallbackError, RateLimitExceeded
 from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,12 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
 
             return response
 
+        except BackendError:
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(
+                status_code=503, content={"error": "Rate limit backend unavailable"}
+            )
         except RateLimitCallbackError as exc:
             from starlette.responses import JSONResponse
 

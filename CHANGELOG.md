@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased (planned 0.5.0)
+## v0.5.0 (unreleased)
+
+Release preparation only: no tag or PyPI publication has been made.
 
 ### Behavior changes
 
@@ -19,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lua/backend inputs now require integer scaled capacities of 1–9,007,199,254,000 and integer windows of 1–86,400 seconds. Token refill rates must be finite and between capacity/86,400 and 9,007,199,254,000 scaled units/second (full refill within a day). Independent custom refill rates raise `BackendError` if cumulative accrual exceeds the exact numeric range. Backend permanent denials use `retry_after=-1` and `reset_at=None`.
 - Backend decision failures remain fail-closed by default: manual checks raise `BackendError`, while both HTTP integrations now return 503 without quota or retry headers instead of an unhandled 500. Confirmed quota denials remain 429/422.
 - Opt-in `fail_open=True` bypasses feasible request checks on `BackendError`, with a warning and mandatory metrics. It automatically enables Prometheus collection and requires the metrics extra. Bypassed `CheckResult` values have `allowed=True` and `remaining=None`, `retry_after=None`, `reset_at=None`; integrations omit quota headers. Callers using remaining capacity must handle unknown metadata. Configuration/callback failures, cancellation, and over-capacity costs are never bypassed. Administrative APIs and eager connection/context-manager entry retain their existing failure behavior.
+- Docker demos now use Python 3.12 and an installed wheel, without source bind mounts or auto-reload. Published ports bind to loopback; Compose v2 is required. Test and benchmark profiles use separate image targets, and tests use their own disposable Redis. Demo Redis uses `noeviction` instead of `allkeys-lru`, so memory exhaustion fails decisions rather than silently resetting quotas. The library's Python 3.9–3.13 support and redis-py 5.0.0 floor are unchanged.
+
+### Changed
+
+- Runtime, package, and Commitizen versions are aligned at 0.5.0. CI verifies wheel and source-distribution resources, metadata, optional extras, and real Redis decisions from clean installed environments. Release preflight rejects mismatched tag/package/runtime versions and missing, empty, or unreleased changelog sections before creating or publishing a release.
+- Docker build contexts use an allowlist excluding local environments, credentials, Git/Amp files, and caches. Runtime images exclude Poetry, test tools, and benchmark dependencies; the benchmark profile runs the actual quick performance harness and retains JSON reports in a named volume. Optional development RedisInsight uses the supported image, port 5540, and a dedicated data volume. The development stack has a distinct Compose project to avoid replacing the demo Redis when switching stacks.
 
 ### Added
 
@@ -35,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Interrupted Redis connection attempts, including cancellation or failures in success logging, close allocated clients; explicit close also cleans up clients that never completed connection. Cleanup is shielded from AnyIO cancel scopes, and failed cleanup retains the client for retry before reconnect can replace it. Repeated close and reconnect remain supported. Async cleanup works with redis-py 5.0.0 as declared, without raising the dependency floor; CI now tests the minimum declared in `pyproject.toml`.
 - Enforcing ASGI middleware recognizes case-insensitive forwarded header names when proxy trust is explicitly enabled. Untrusted headers still cannot select a different quota. Missing or `None` ASGI clients share the existing unknown-client quota instead of crashing.
 - README and FastAPI example lifespans close the limiter on exceptional exit as well as normal shutdown, including post-connect startup logging failures in the examples.
+- Both HTTP examples install the error/header middleware, returning 503 rather than 500 on backend outages. The FastAPI demo exposes quota/retry headers to cross-origin browser clients. The multi-tenant demo has a readiness endpoint; Docker checks the configured port and Redis readiness rather than accepting any successful HTTP response. Docker smoke checks tolerate existing quota usage while still checking fresh admission, denial headers, and outage failures.
 - Public token policies rebase whole-window refill progress without losing fractional credit, avoiding unbounded credited-unit counters in continuously busy buckets. Quotient/remainder arithmetic and decimal integer serialization prevent high-capacity refill rounding and scientific-notation usage parsing failures.
 - Public token retry/full-refill deadlines use the same integer credit calculation as admission, avoiding a spurious extra millisecond from floating-point division/ceiling. Slow custom backend refill rates now retain state for twice the longer of the configured window or full-refill duration, plus 60 seconds, rather than expiring before full recovery.
 

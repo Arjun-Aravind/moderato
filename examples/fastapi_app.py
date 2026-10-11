@@ -18,7 +18,12 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from moderato import RateLimitCallbackError, RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import (  # noqa: E402
+    RateLimitCallbackError,
+    RateLimiter,
+    RateLimitExceeded,
+    RateLimitHeadersMiddleware,
+)
 
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 limiter = RateLimiter(redis_url=redis_url)
@@ -42,12 +47,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RateLimitHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "Retry-After",
+    ],
 )
 
 

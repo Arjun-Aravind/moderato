@@ -11,6 +11,10 @@
 
 A Redis-backed rate limiting library for async Python applications.
 
+**Release status:** this checkout prepares **0.5.0**, but it is not yet tagged or
+published. The PyPI badge reflects the published version; installation from PyPI
+may still provide 0.4.0 and its earlier behavior.
+
 [Features](#features) | [Quick Start](#quick-start) | [Algorithms](#algorithms) | [Documentation](#documentation) | [Examples](#examples)
 
 ---
@@ -108,7 +112,7 @@ All three algorithms charge only **admitted requests**. For example, under a
 consuming quota; a subsequent cost-2 request can still be admitted. Admission
 charges the quota even if the protected application operation later fails.
 
-This is a planned **0.5.0 behavior change** for fixed windows, which previously
+This is a **0.5.0 behavior change** for fixed windows, which previously
 charged rejected attempts. Existing counters retain their recorded usage until
 expiry or an explicit reset; upgrading does not undo earlier charges.
 
@@ -149,7 +153,7 @@ async def endpoint(request: Request):
 **Pros:** Continuous refill and configurable burst capacity
 **Cons:** State uses a Redis hash and allows bursts up to bucket capacity
 
-For the planned 0.5.0 upgrade, `RateLimiter` uses token keys ending in
+For the 0.5.0 upgrade, `RateLimiter` uses token keys ending in
 `:bucket:v2` rather than `:bucket`. This isolates the new `refill_units` hash
 schema from old writers during rolling deployments and rollback. New buckets
 start full; old quotas are not migrated and their keys expire normally.
@@ -367,7 +371,7 @@ async def ml_inference(request: Request):
     return {"prediction": "..."}
 ```
 
-For planned 0.5.0, `cost` accepts a static integer or a request callback.
+In 0.5.0, `cost` accepts a static integer or a request callback.
 Costs must be positive integers (not booleans or floats). A static cost above
 the policy capacity raises `RateLimitConfigError` when creating the decorator,
 before Redis is contacted. Callbacks still run per request: a valid positive
@@ -437,7 +441,7 @@ Key, tenant, and cost callbacks fail closed: their exception raises
 `RateLimitCallbackError` before the endpoint runs. With
 `RateLimitHeadersMiddleware`, this becomes the same 503 response automatically.
 
-### Backend Failure Policy (planned 0.5.0)
+### Backend Failure Policy (0.5.0)
 
 **Fail closed is the default:** `RateLimiter(fail_open=False)`. If Redis cannot
 provide a decision, manual `check()` and `check_with_info()` calls raise
@@ -525,7 +529,7 @@ Numbers on this page's benchmarks are measured, not claimed: the harness commits
 Run the benchmark suite against a local Redis instance yourself:
 
 ```bash
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml up -d --wait
 poetry install
 poetry run python benchmarks/performance.py --quick
 ```
@@ -553,7 +557,7 @@ See the [examples/](examples/) directory:
 
 ```bash
 # Start Redis
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml up -d --wait
 
 # FastAPI demo
 poetry run uvicorn examples.fastapi_app:app --reload
@@ -564,6 +568,47 @@ poetry run uvicorn examples.multi_tenant:app --reload --port 8001
 # Algorithm comparison
 poetry run python examples/algorithms_demo.py
 ```
+
+### Running the Docker demos
+
+Requires Docker with Compose v2. Use either the development Redis above or the
+full Docker stack below, not both on port 6379. The development stack uses the
+separate `moderato-dev` project so it cannot silently replace the demo Redis.
+Stop the current stack before switching:
+`docker compose -f docker-compose.dev.yml down` for development, or
+`docker compose --profile test --profile benchmark down` for the demos.
+Neither command deletes stored data.
+
+```bash
+docker compose up -d --build --wait
+docker compose --profile test run --rm --build tests
+docker compose --profile benchmark run --rm --build benchmark
+docker compose --profile test --profile benchmark down
+```
+
+The examples listen on local ports 8000 and 8001. These are demos, not a hardened
+production deployment: the tenant API has public demo API/admin keys and Redis
+has no authentication. Ports bind only to loopback by default. Runtime images use
+Python 3.12, install the built Moderato wheel, run as a non-root user, and exclude
+Poetry, test tools, and benchmark dependencies. The test target uses a separate
+disposable Redis because tests clear the database. The benchmark target runs the
+actual quick performance harness; its console output is a smoke run, not updated
+published benchmark evidence. Its JSON reports survive `--rm` in the
+`benchmark_results` volume. Export them without changing host-directory ownership:
+
+```bash
+docker compose --profile benchmark run --rm --no-deps benchmark \
+  tar -C benchmarks/results -cf - . > benchmark-results.tar
+```
+
+Both demos expose `/api/status`. Container health checks use each service's port
+and require `redis_connected=true`, so a Redis outage makes the containers
+unhealthy. Redis uses `noeviction`: a full Redis must fail decisions rather than
+silently evict quota state. `docker compose down` retains the demo Redis volume;
+only add `--volumes` when deliberately discarding demo data and benchmark reports.
+
+For optional RedisInsight during local development:
+`docker compose -f docker-compose.dev.yml --profile debug up -d` (port 5540).
 
 ---
 
@@ -604,7 +649,7 @@ git clone https://github.com/Arjun-Aravind/moderato.git
 cd moderato
 
 poetry install
-docker-compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml up -d --wait
 poetry run pytest
 ```
 

@@ -27,10 +27,12 @@ limiter = RateLimiter(redis_url=redis_url)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await limiter.connect()
-    print("Connected to Redis")
-    yield
-    await limiter.close()
-    print("Disconnected from Redis")
+    try:
+        print("Connected to Redis")
+        yield
+    finally:
+        await limiter.close()
+        print("Disconnected from Redis")
 
 
 app = FastAPI(

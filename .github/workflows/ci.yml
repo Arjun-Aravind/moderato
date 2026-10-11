@@ -29,12 +29,16 @@ jobs:
           cz check --rev-range origin/${{ github.base_ref }}..HEAD
 
   test:
-    name: Test Python ${{ matrix.python-version }}
+    name: Test Python ${{ matrix.python-version }} (Redis ${{ matrix.redis-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        redis-version: [locked]
+        include:
+          - python-version: "3.12"
+            redis-version: minimum
 
     services:
       redis:
@@ -75,6 +79,13 @@ jobs:
 
       - name: Install project
         run: poetry install --no-interaction
+
+      - name: Install minimum supported redis-py
+        if: matrix.redis-version == 'minimum'
+        run: |
+          minimum=$(python -c 'import tomllib; spec = tomllib.load(open("pyproject.toml", "rb"))["tool"]["poetry"]["dependencies"]["redis"]; assert spec.startswith("^"), "Update floor extraction for the new dependency syntax"; print(spec[1:])')
+          poetry run pip install "redis==$minimum"
+          poetry run pip check
 
       - name: Run tests
         run: poetry run pytest --cov=moderato --cov-report=xml -v

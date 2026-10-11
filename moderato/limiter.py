@@ -10,6 +10,8 @@ from collections.abc import Awaitable
 from types import TracebackType
 from typing import Any, Callable, Optional, TypeVar, Union
 
+import anyio
+
 from .backends.redis import RedisBackend, _redact_redis_url
 from .exceptions import BackendError, RateLimitConfigError, RateLimitExceeded
 from .models import CheckResult, RateLimitConfig
@@ -181,11 +183,15 @@ class RateLimiter:
 
         This method is idempotent and thread-safe.
         """
-        async with self._lock:
-            if self._connected:
-                await self.backend.close()
-                self._connected = False
-                logger.info("RateLimiter disconnected from Redis")
+        with anyio.CancelScope(shield=True):
+            async with self._lock:
+                was_connected = self._connected
+                try:
+                    await self.backend.close()
+                finally:
+                    self._connected = False
+                if was_connected:
+                    logger.info("RateLimiter disconnected from Redis")
 
     async def _run_backend_operation(self, operation: str, awaitable: Awaitable[T]) -> T:
         if self.metrics is None:

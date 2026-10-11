@@ -45,7 +45,7 @@ jobs:
         run: |
           docker compose --profile test --profile benchmark down
           docker compose -f docker-compose.dev.yml --profile debug up -d --wait --wait-timeout 120
-          curl --fail --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:5540/api/health/
+          curl --fail --retry 30 --retry-delay 2 --retry-all-errors http://127.0.0.1:5540/api/health/
 
       - name: Container logs
         if: always()

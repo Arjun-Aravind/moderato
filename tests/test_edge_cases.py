@@ -165,7 +165,7 @@ class TestConnectionHandling:
     """Tests for connection handling and error recovery."""
 
     @pytest.mark.parametrize(
-        "failure", ["connection", "unexpected", "cancelled", "anyio", "cleanup_failure"]
+        "failure", ["connection", "unexpected", "cancelled", "anyio", "cleanup_failure", "logging"]
     )
     async def test_failed_connect_releases_connection_and_can_retry(
         self, redis_url, redis_client, monkeypatch, failure
@@ -175,6 +175,15 @@ class TestConnectionHandling:
         from_url = redis.from_url
         reached_ping = asyncio.Event()
         scopes = []
+        if failure == "logging":
+            from moderato.backends.redis import logger
+
+            info = logger.info
+
+            def broken_log(*args, **kwargs):
+                raise RuntimeError("interrupted handshake")
+
+            monkeypatch.setattr(logger, "info", broken_log)
 
         def interrupted_client(*args, **kwargs):
             client = from_url(*args, client_name=name, **kwargs)
@@ -196,6 +205,8 @@ class TestConnectionHandling:
             async def interrupted_ping():
                 await ping()
                 reached_ping.set()
+                if failure == "logging":
+                    return True
                 if failure in ("cancelled", "anyio"):
                     await asyncio.Event().wait()
                 if failure in ("connection", "cleanup_failure"):
@@ -226,6 +237,8 @@ class TestConnectionHandling:
             else:
                 with pytest.raises(BackendError, match="interrupted handshake"):
                     await task
+            if failure == "logging":
+                monkeypatch.setattr(logger, "info", info)
             assert not await limiter.health_check()
             if failure == "cleanup_failure":
                 assert any(c["name"] == name for c in await redis_client.client_list())

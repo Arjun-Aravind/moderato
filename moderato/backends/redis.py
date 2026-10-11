@@ -112,9 +112,9 @@ class RedisBackend:
             # Load scripts into Redis for better performance
             await self._register_scripts()
 
-            self._connected = True
             # Redact password from URL before logging
             logger.info(f"Connected to Redis at {_redact_redis_url(self.config.redis_url)}")
+            self._connected = True
 
         except RedisConnectionError as e:
             raise BackendError(f"Failed to connect to Redis: {e}") from e
@@ -156,7 +156,7 @@ class RedisBackend:
             with anyio.CancelScope(shield=True):
                 await close()
             self._redis = None
-            logger.info("Closed Redis connection")
+            logger.debug("Closed Redis client")
 
     async def check_fixed_window(
         self,

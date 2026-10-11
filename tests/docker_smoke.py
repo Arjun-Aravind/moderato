@@ -24,17 +24,33 @@ def verify(phase):
     for port in ports:
         status, body, _ = request(port, "/api/status")
         assert status == 200 and body["redis_connected"] == (phase != "outage")
-    policies = [(ports[0], "/api/limited", {}), (ports[1], "/api/data", {"X-API-Key": "key-001"})]
+    if phase == "healthy":
+        assert request(ports[0], f"/api/user/{uuid4().hex}")[0] == 200
+    policies = [
+        (ports[0], "/api/limited", {"Origin": "https://client.example"}),
+        (ports[1], "/api/data", {"X-API-Key": "key-001"}),
+    ]
     for port, path, headers in policies:
         if phase == "healthy":
-            first, _, _ = request(port, path, headers)
-            assert first == 200
             # These minute-window demos must eventually deny this burst even
-            # if the burst crosses a boundary; exact accounting is tested by pytest.
-            results = [request(port, path, headers) for _ in range(25)]
+            # with existing quota usage or a boundary crossing. A fresh user
+            # above verifies admission; exact accounting is tested by pytest.
+            results = [request(port, path, headers) for _ in range(26)]
             assert all(status in (200, 429) for status, _, _ in results)
             denials = [headers for status, _, headers in results if status == 429]
             assert denials and all(int(headers["Retry-After"]) > 0 for headers in denials)
+            if port == ports[0]:
+                for _, _, response_headers in results:
+                    exposed = {
+                        name.strip().lower()
+                        for name in response_headers["Access-Control-Expose-Headers"].split(",")
+                    }
+                    assert {
+                        "x-ratelimit-limit",
+                        "x-ratelimit-remaining",
+                        "x-ratelimit-reset",
+                        "retry-after",
+                    } <= exposed
         elif phase == "outage":
             status, _, response_headers = request(port, path, headers)
             assert status == 503

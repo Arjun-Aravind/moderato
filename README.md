@@ -572,7 +572,12 @@ poetry run python examples/algorithms_demo.py
 ### Running the Docker demos
 
 Requires Docker with Compose v2. Use either the development Redis above or the
-full Docker stack below, not both on port 6379.
+full Docker stack below, not both on port 6379. The development stack uses the
+separate `moderato-dev` project so it cannot silently replace the demo Redis.
+Stop the current stack before switching:
+`docker compose -f docker-compose.dev.yml down` for development, or
+`docker compose --profile test --profile benchmark down` for the demos.
+Neither command deletes stored data.
 
 ```bash
 docker compose up -d --build --wait
@@ -588,13 +593,19 @@ Python 3.12, install the built Moderato wheel, run as a non-root user, and exclu
 Poetry, test tools, and benchmark dependencies. The test target uses a separate
 disposable Redis because tests clear the database. The benchmark target runs the
 actual quick performance harness; its console output is a smoke run, not updated
-published benchmark evidence.
+published benchmark evidence. Its JSON reports survive `--rm` in the
+`benchmark_results` volume. Export them without changing host-directory ownership:
+
+```bash
+docker compose --profile benchmark run --rm --no-deps benchmark \
+  tar -C benchmarks/results -cf - . > benchmark-results.tar
+```
 
 Both demos expose `/api/status`. Container health checks use each service's port
 and require `redis_connected=true`, so a Redis outage makes the containers
 unhealthy. Redis uses `noeviction`: a full Redis must fail decisions rather than
 silently evict quota state. `docker compose down` retains the demo Redis volume;
-only add `--volumes` when deliberately discarding that demo data.
+only add `--volumes` when deliberately discarding demo data and benchmark reports.
 
 For optional RedisInsight during local development:
 `docker compose -f docker-compose.dev.yml --profile debug up -d` (port 5540).

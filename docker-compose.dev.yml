@@ -1,6 +1,8 @@
 # Development docker-compose configuration
 # Usage: docker compose -f docker-compose.dev.yml up -d
 
+name: moderato-dev
+
 services:
   redis:
     image: redis:7-alpine

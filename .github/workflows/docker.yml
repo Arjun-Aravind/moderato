@@ -18,11 +18,13 @@ jobs:
         run: |
           docker compose --profile test --profile benchmark --profile debug config --quiet
           docker compose -f docker-compose.dev.yml --profile debug config --quiet
+          test "$(docker compose config --format json | jq -r .name)" != "$(docker compose -f docker-compose.dev.yml config --format json | jq -r .name)"
 
       - name: Build and start the installed-wheel demos
         run: |
           docker compose up -d --build --wait --wait-timeout 120
           docker compose exec -T app python -c "import moderato,os,importlib.util; assert moderato.__file__.startswith('/opt/venv/'); assert os.getuid() != 0; assert all(importlib.util.find_spec(name) is None for name in ('pytest','poetry','locust','matplotlib')); print('runtime isolation: OK')"
+          python tests/docker_smoke.py healthy
           python tests/docker_smoke.py healthy
 
       - name: Confirm Redis outage marks both demos unhealthy
@@ -40,6 +42,14 @@ jobs:
           docker compose --profile test run --rm --build tests
           test "$(docker compose exec -T redis redis-cli GET docker-test-sentinel)" = retained
           docker compose --profile benchmark run --rm --build benchmark
+          docker compose --profile benchmark run --rm --no-deps benchmark python -c "import glob,json; paths=glob.glob('benchmarks/results/quick-*.json'); assert paths; [json.load(open(path)) for path in paths]; print('persisted benchmark JSON: OK')"
+          docker compose --profile benchmark run --rm --no-deps benchmark tar -C benchmarks/results -cf - . > "$RUNNER_TEMP/docker-benchmark-results.tar"
+
+      - name: Retain benchmark smoke evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-benchmark-smoke
+          path: ${{ runner.temp }}/docker-benchmark-results.tar
 
       - name: Verify development Redis and optional RedisInsight
         run: |

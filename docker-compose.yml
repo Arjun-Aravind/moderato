@@ -106,6 +106,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: benchmark
+    volumes:
+      - benchmark_results:/app/benchmarks/results
     depends_on:
       redis:
         condition: service_healthy
@@ -126,3 +128,4 @@ networks:
 volumes:
   redis_data:
     driver: local
+  benchmark_results:

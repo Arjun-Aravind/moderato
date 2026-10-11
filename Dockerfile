@@ -34,6 +34,7 @@ CMD ["sh", "-c", "exec uvicorn examples.fastapi_app:app --host 0.0.0.0 --port \"
 # Run the real performance harness, not the algorithm demonstration.
 FROM runtime AS benchmark
 COPY --chown=moderato:moderato benchmarks ./benchmarks
+RUN mkdir -p benchmarks/results
 CMD ["python", "benchmarks/performance.py", "--quick"]
 
 # Keep the demo runtime as the default docker build target.

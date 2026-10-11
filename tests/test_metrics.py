@@ -254,6 +254,40 @@ async def test_fail_open_http_has_no_quota_headers_and_recovers(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bypass_first", [False, True])
+async def test_stacked_bypass_omits_quota_headers(frozen_limiter, bypass_first, monkeypatch):
+    limiter = frozen_limiter
+    limiter.config.fail_open = True
+    limiter.metrics = init_metrics()
+    original = limiter.backend.check_fixed_window
+
+    async def selective_failure(key, max_requests, window_seconds, **kwargs):
+        if max_requests == 3000:
+            raise BackendError("one policy is unavailable")
+        return await original(key, max_requests, window_seconds, **kwargs)
+
+    monkeypatch.setattr(limiter.backend, "check_fixed_window", selective_failure)
+    app = FastAPI()
+    app.add_middleware(RateLimitHeadersMiddleware)
+    outer, inner = ("3/day", "2/day") if bypass_first else ("2/day", "3/day")
+
+    @app.get("/")
+    @limiter.limit(outer)
+    @limiter.limit(inner)
+    async def endpoint(request: Request):
+        return {"ok": True}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+    assert response.status_code == 200 and response.json() == {"ok": True}
+    assert not any(name.startswith("x-ratelimit-") for name in response.headers)
+    assert _sample("moderato_fail_open_total", {"algorithm": "fixed_window"}) == 1
+    assert _sample("moderato_checks_total", {"algorithm": "fixed_window", "result": "allowed"}) == 1
+
+
+@pytest.mark.asyncio
 async def test_limiter_records_checks_and_backend_operations(redis_url):
     limiter = RateLimiter(
         redis_url=redis_url,

@@ -443,6 +443,11 @@ provide a decision, manual `check()` and `check_with_info()` calls raise
 **503** with `{"error": "Rate limit backend unavailable"}`, without quota or
 retry headers. This is not a confirmed quota denial: those remain 429, or
 422 when the request cost exceeds capacity.
+Both middleware also translate escaping Moderato `BackendError` exceptions
+from downstream manual checks, usage snapshots, or resets into 503 responses
+before a response starts. These operations still raise normally outside HTTP;
+unrelated exception types are not translated. Once ASGI response headers have
+been sent, an error is propagated rather than starting a second response.
 
 For availability-first applications, explicitly opt into fail-open:
 
@@ -462,7 +467,8 @@ than letting uncounted requests through.
 `check()` returns `True` for a bypass; `check_with_info()` returns
 `allowed=True` with `remaining=None`, `retry_after=None`, and `reset_at=None`.
 The configured `limit` and `window_seconds` are still known. HTTP integrations
-omit all rate-limit headers for bypasses. Check `remaining is not None` before
+omit quota headers on successful responses if any stacked decorator bypassed
+its policy, regardless of decorator order. Check `remaining is not None` before
 using it as a quota measurement; unknown does not mean zero or a fresh quota.
 
 Fail-open never hides invalid configuration, callback failures, or cancellation,

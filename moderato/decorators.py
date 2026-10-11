@@ -239,14 +239,19 @@ async def _check_rate_limit(
             scope=scope,
         )
 
-        # A fail-open bypass has no backend quota metadata to advertise.
-        if hasattr(request, "state") and result.remaining is not None:
-            request.state.rate_limit_info = {
-                "limit": result.limit,
-                "remaining": result.remaining,
-                "window_seconds": result.window_seconds,
-                "reset_at": result.reset_at,
-            }
+        # Any bypass in a decorator stack suppresses successful quota headers.
+        if hasattr(request, "state"):
+            if result.remaining is None:
+                request.state.rate_limit_bypassed = True
+            if getattr(request.state, "rate_limit_bypassed", False):
+                request.state.rate_limit_info = None
+            else:
+                request.state.rate_limit_info = {
+                    "limit": result.limit,
+                    "remaining": result.remaining,
+                    "window_seconds": result.window_seconds,
+                    "reset_at": result.reset_at,
+                }
 
         if not result.allowed:
             raise RateLimitExceeded(
@@ -434,7 +439,24 @@ class RateLimitMiddleware:
             denial = None if result.allowed else result
 
         if denial is None:
-            await self.app(scope, receive, send)
+            response_started = False
+
+            async def send_with_tracking(message: dict[str, Any]) -> None:
+                nonlocal response_started
+                if message["type"] == "http.response.start":
+                    response_started = True
+                await send(message)
+
+            try:
+                await self.app(scope, receive, send_with_tracking)
+            except BackendError:
+                if response_started:
+                    raise
+                from starlette.responses import JSONResponse
+
+                await JSONResponse(
+                    status_code=503, content={"error": "Rate limit backend unavailable"}
+                )(scope, receive, send)
             return
 
         retry_after = denial.retry_after

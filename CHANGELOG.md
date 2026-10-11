@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
 - Permanent denial exceptions discard supplied reset timestamps, and ASGI denial responses omit reset headers when no retry is possible.
 - Oversized fixed-window requests repair a missing expiry on existing counters without changing usage, creating cold counters, or extending valid expiries.
+- Successful responses suppress quota headers if any stacked decorator bypassed its policy, regardless of order. ASGI middleware maps downstream Moderato backend errors to 503 before response start and propagates errors after response start rather than sending a second response.
 - Public token policies rebase whole-window refill progress without losing fractional credit, avoiding unbounded credited-unit counters in continuously busy buckets. Quotient/remainder arithmetic and decimal integer serialization prevent high-capacity refill rounding and scientific-notation usage parsing failures.
 - Public token retry/full-refill deadlines use the same integer credit calculation as admission, avoiding a spurious extra millisecond from floating-point division/ceiling. Slow custom backend refill rates now retain state for twice the longer of the configured window or full-refill duration, plus 60 seconds, rather than expiring before full recovery.
 

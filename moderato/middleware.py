@@ -75,6 +75,7 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
         """
         # Initialize rate limit info storage on request state
         request.state.rate_limit_info = None
+        request.state.rate_limit_bypassed = False
 
         try:
             # Call the next middleware or route handler

@@ -13,6 +13,7 @@ import asyncio
 import time
 from uuid import uuid4
 
+import anyio
 import pytest
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
@@ -163,7 +164,9 @@ class TestExtremeValues:
 class TestConnectionHandling:
     """Tests for connection handling and error recovery."""
 
-    @pytest.mark.parametrize("failure", ["connection", "unexpected", "cancelled"])
+    @pytest.mark.parametrize(
+        "failure", ["connection", "unexpected", "cancelled", "anyio", "cleanup_failure"]
+    )
     async def test_failed_connect_releases_connection_and_can_retry(
         self, redis_url, redis_client, monkeypatch, failure
     ):
@@ -171,17 +174,31 @@ class TestConnectionHandling:
         name = f"failed-connect-{uuid4()}"
         from_url = redis.from_url
         reached_ping = asyncio.Event()
+        scopes = []
 
         def interrupted_client(*args, **kwargs):
             client = from_url(*args, client_name=name, **kwargs)
             ping = client.ping
+            if failure == "cleanup_failure":
+                close_name = "aclose" if hasattr(client, "aclose") else "close"
+                close = getattr(client, close_name)
+                first_close = True
+
+                async def interrupted_close():
+                    nonlocal first_close
+                    if first_close:
+                        first_close = False
+                        raise RuntimeError("cleanup interrupted")
+                    await close()
+
+                monkeypatch.setattr(client, close_name, interrupted_close)
 
             async def interrupted_ping():
                 await ping()
                 reached_ping.set()
-                if failure == "cancelled":
+                if failure in ("cancelled", "anyio"):
                     await asyncio.Event().wait()
-                if failure == "connection":
+                if failure in ("connection", "cleanup_failure"):
                     raise RedisConnectionError("interrupted handshake")
                 raise RuntimeError("interrupted handshake")
 
@@ -190,10 +207,19 @@ class TestConnectionHandling:
 
         limiter = RateLimiter(redis_url=redis_url)
         monkeypatch.setattr(redis, "from_url", interrupted_client)
-        task = asyncio.create_task(limiter.connect())
+
+        async def connect():
+            with anyio.CancelScope() as scope:
+                scopes.append(scope)
+                await limiter.connect()
+
+        task = asyncio.create_task(connect())
         try:
             await asyncio.wait_for(reached_ping.wait(), timeout=5)
-            if failure == "cancelled":
+            if failure == "anyio":
+                scopes[0].cancel()
+                await task
+            elif failure == "cancelled":
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
@@ -201,6 +227,10 @@ class TestConnectionHandling:
                 with pytest.raises(BackendError, match="interrupted handshake"):
                     await task
             assert not await limiter.health_check()
+            if failure == "cleanup_failure":
+                assert any(c["name"] == name for c in await redis_client.client_list())
+                monkeypatch.setattr(redis, "from_url", from_url)
+                await limiter.connect()
             assert not any(c["name"] == name for c in await redis_client.client_list())
             await limiter.close()
             await limiter.close()

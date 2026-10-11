@@ -20,7 +20,7 @@ from moderato.utils import generate_key
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("module_name", ["examples.fastapi_app", "examples.multi_tenant"])
-@pytest.mark.parametrize("exceptional", [False, True])
+@pytest.mark.parametrize("exceptional", [False, True, "startup"])
 async def test_example_lifespan_closes_on_exit(monkeypatch, redis_url, module_name, exceptional):
     """Example cleanup must run even when the lifespan body raises."""
     from importlib import import_module
@@ -30,6 +30,12 @@ async def test_example_lifespan_closes_on_exit(monkeypatch, redis_url, module_na
     module = import_module(module_name)
     limiter = RateLimiter(redis_url=redis_url)
     monkeypatch.setattr(module, "limiter", limiter)
+    if exceptional == "startup":
+
+        def broken_print(*args):
+            raise RuntimeError("lifespan body failed")
+
+        monkeypatch.setattr(module, "print", broken_print, raising=False)
 
     async def run():
         async with module.lifespan(module.app):

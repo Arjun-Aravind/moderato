@@ -38,7 +38,7 @@ jobs:
         redis-version: [locked]
         include:
           - python-version: "3.12"
-            redis-version: "5.0.0"
+            redis-version: minimum
 
     services:
       redis:
@@ -81,8 +81,11 @@ jobs:
         run: poetry install --no-interaction
 
       - name: Install minimum supported redis-py
-        if: matrix.redis-version == '5.0.0'
-        run: poetry run pip install redis==5.0.0 && poetry run pip check
+        if: matrix.redis-version == 'minimum'
+        run: |
+          minimum=$(python -c 'import tomllib; spec = tomllib.load(open("pyproject.toml", "rb"))["tool"]["poetry"]["dependencies"]["redis"]; assert spec.startswith("^"), "Update floor extraction for the new dependency syntax"; print(spec[1:])')
+          poetry run pip install "redis==$minimum"
+          poetry run pip check
 
       - name: Run tests
         run: poetry run pytest --cov=moderato --cov-report=xml -v

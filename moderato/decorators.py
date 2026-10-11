@@ -315,10 +315,9 @@ def _get_default_key(request: Any, trust_proxy_headers: bool = False) -> str:
     # Behind a reverse proxy, the direct client address is the proxy itself,
     # so trusted headers must win over request.client.host.
     if trust_proxy_headers and hasattr(request, "headers"):
+        headers = {name.lower(): value for name, value in request.headers.items()}
         # X-Forwarded-For header (behind proxy)
-        forwarded_for = request.headers.get("X-Forwarded-For") or request.headers.get(
-            "x-forwarded-for"
-        )
+        forwarded_for = headers.get("x-forwarded-for")
         if forwarded_for:
             # Take the first IP in the chain (original client IP)
             ip = forwarded_for.split(",")[0].strip()
@@ -326,7 +325,7 @@ def _get_default_key(request: Any, trust_proxy_headers: bool = False) -> str:
                 return f"ip:{ip}"
 
         # X-Real-IP header (nginx)
-        real_ip = request.headers.get("X-Real-IP") or request.headers.get("x-real-ip")
+        real_ip = headers.get("x-real-ip")
         if real_ip:
             return f"ip:{real_ip}"
 
@@ -411,13 +410,11 @@ class RateLimitMiddleware:
         class SimpleRequest:
             def __init__(self, scope: dict[str, Any]) -> None:
                 client = scope.get("client")
-                self.client = type("Client", (), {"host": client[0] if client else None})()
-                # Decode ASGI bytes without requiring an optional framework, and
-                # normalize field names because HTTP headers are case-insensitive.
+                self.client = type("Client", (), {"host": client[0] if client else "unknown"})()
+                # Decode ASGI bytes without requiring an optional framework.
+                # Header names are normalized by the shared identity helper.
                 raw_headers = scope.get("headers", [])
-                self.headers = {
-                    k.decode("latin-1").lower(): v.decode("latin-1") for k, v in raw_headers
-                }
+                self.headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in raw_headers}
                 self.path = scope.get("path", "")
 
         request: Any = SimpleRequest(scope)

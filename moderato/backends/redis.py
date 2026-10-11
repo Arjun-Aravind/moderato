@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
+import anyio
 import redis.asyncio as redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import NoScriptError, RedisError
@@ -92,6 +93,9 @@ class RedisBackend:
             return
 
         try:
+            # A previous cleanup failure must not orphan its pool on retry.
+            if self._redis is not None:
+                await self.close()
             # Create Redis connection with connection pooling
             self._redis = redis.from_url(
                 self.config.redis_url,
@@ -145,10 +149,13 @@ class RedisBackend:
         if self._redis is not None:
             # redis-py 5.0.0 exposes async close(); later 5.x prefers aclose().
             close = getattr(self._redis, "aclose", None) or self._redis.close
-            await close()
-            self._redis = None
             self._connected = False
             self._script_shas.clear()
+            # Keep the client available for a cleanup retry if close raises.
+            # Shield level cancellation from AnyIO-based HTTP integrations.
+            with anyio.CancelScope(shield=True):
+                await close()
+            self._redis = None
             logger.info("Closed Redis connection")
 
     async def check_fixed_window(

@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## v0.5.0 (unreleased)
 
-Release preparation only: no tag or PyPI publication has been made.
-
 ### Behavior changes
 
 - Fixed windows now charge only admitted requests, matching token bucket and sliding window accounting. Rejected requests no longer increment usage or consume the capacity that a smaller request could use. Existing counters inflated by older rejected attempts remain until their window expires or they are explicitly reset.

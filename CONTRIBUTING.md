@@ -144,8 +144,8 @@ redis-server
 # Start Redis container
 docker run -d -p 6379:6379 redis:7-alpine
 
-# Or use docker-compose
-docker-compose up -d
+# Or use Compose v2 for development Redis
+docker compose -f docker-compose.dev.yml up -d --wait
 ```
 
 ### 6. Verify Setup

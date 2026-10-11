@@ -17,7 +17,12 @@ from fastapi.responses import JSONResponse
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from moderato import RateLimitCallbackError, RateLimiter, RateLimitExceeded  # noqa: E402
+from moderato import (  # noqa: E402
+    RateLimitCallbackError,
+    RateLimiter,
+    RateLimitExceeded,
+    RateLimitHeadersMiddleware,
+)
 
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 limiter = RateLimiter(redis_url=redis_url)
@@ -40,6 +45,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+app.add_middleware(RateLimitHeadersMiddleware)
 
 # Simulated tenant database
 TENANT_DATABASE = {
@@ -112,6 +118,12 @@ async def rate_limit_callback_handler(request: Request, exc: RateLimitCallbackEr
         status_code=503,
         content={"error": "Rate limit callback failed", "callback": exc.callback},
     )
+
+
+@app.get("/api/status")
+async def status_endpoint():
+    """Unauthenticated readiness check for the demo and its Redis backend."""
+    return {"redis_connected": await limiter.health_check()}
 
 
 @app.get("/")

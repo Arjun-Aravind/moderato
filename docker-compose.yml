@@ -1,18 +1,15 @@
-version: '3.8'
-
 services:
   redis:
     image: redis:7-alpine
-    container_name: moderato-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     command: >
       redis-server
       --appendonly yes
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -22,53 +19,47 @@ services:
       - moderato-network
 
   app:
+    image: moderato-demo:local
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: moderato-app
+      target: runtime
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       redis:
         condition: service_healthy
     environment:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
-    volumes:
-      - ./moderato:/app/moderato
-      - ./examples:/app/examples
-      - ./tests:/app/tests
-    command: uvicorn examples.fastapi_app:app --host 0.0.0.0 --port 8000 --reload
     networks:
       - moderato-network
     restart: unless-stopped
 
   multi-tenant:
+    image: moderato-demo:local
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: moderato-multi-tenant
+      target: runtime
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     depends_on:
       redis:
         condition: service_healthy
     environment:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
-    volumes:
-      - ./moderato:/app/moderato
-      - ./examples:/app/examples
-    command: uvicorn examples.multi_tenant:app --host 0.0.0.0 --port 8001 --reload
+      PORT: 8001
+    command: ["sh", "-c", "exec uvicorn examples.multi_tenant:app --host 0.0.0.0 --port \"$${PORT}\""]
     networks:
       - moderato-network
     restart: unless-stopped
 
   redis-commander:
     image: rediscommander/redis-commander:latest
-    container_name: moderato-redis-commander
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     depends_on:
       - redis
     environment:
@@ -78,21 +69,33 @@ services:
     profiles:
       - debug
 
+  # Tests FLUSHDB: never point them at the examples' persistent Redis.
+  redis-tests:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - moderato-network
+    profiles:
+      - test
+
   tests:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: moderato-tests
+      target: test
     depends_on:
-      redis:
+      redis-tests:
         condition: service_healthy
     environment:
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://redis-tests:6379
       PYTHONUNBUFFERED: 1
-    volumes:
-      - ./moderato:/app/moderato
-      - ./tests:/app/tests
-    command: pytest tests/ -v --tb=short
+    healthcheck:
+      disable: true
     networks:
       - moderato-network
     profiles:
@@ -102,18 +105,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: moderato-benchmark
+      target: benchmark
     depends_on:
       redis:
         condition: service_healthy
     environment:
       REDIS_URL: redis://redis:6379
       PYTHONUNBUFFERED: 1
-    volumes:
-      - ./moderato:/app/moderato
-      - ./examples:/app/examples
-      - ./benchmarks:/app/benchmarks
-    command: python examples/algorithms_demo.py
+    healthcheck:
+      disable: true
     networks:
       - moderato-network
     profiles:

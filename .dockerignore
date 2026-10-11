@@ -1,0 +1,24 @@
+# Allow only inputs required by the explicit build targets.
+**
+!Dockerfile
+!pyproject.toml
+!poetry.lock
+!README.md
+!LICENSE
+!moderato/
+!moderato/**
+!examples/
+!examples/**
+!tests/
+!tests/**
+!benchmarks/
+!benchmarks/**
+benchmarks/results/
+**/.venv/
+**/.git/
+**/.amp/
+**/__pycache__/
+**/*.py[cod]
+**/.env*
+**/*.pem
+**/*.key

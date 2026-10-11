@@ -1,0 +1,60 @@
+name: Docker
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  docker:
+    name: Docker Build & Runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Compose configurations
+        run: |
+          docker compose --profile test --profile benchmark --profile debug config --quiet
+          docker compose -f docker-compose.dev.yml --profile debug config --quiet
+
+      - name: Build and start the installed-wheel demos
+        run: |
+          docker compose up -d --build --wait --wait-timeout 120
+          docker compose exec -T app python -c "import moderato,os,importlib.util; assert moderato.__file__.startswith('/opt/venv/'); assert os.getuid() != 0; assert all(importlib.util.find_spec(name) is None for name in ('pytest','poetry','locust','matplotlib')); print('runtime isolation: OK')"
+          python tests/docker_smoke.py healthy
+
+      - name: Confirm Redis outage marks both demos unhealthy
+        run: |
+          docker compose stop redis
+          python tests/docker_smoke.py outage
+          timeout 90 bash -c 'until docker compose ps --format json | jq -se "[.[] | select(.Service == \"app\" or .Service == \"multi-tenant\") | .Health] == [\"unhealthy\", \"unhealthy\"]"; do sleep 2; done'
+          docker compose start redis
+          docker compose up -d --wait --wait-timeout 120
+          python tests/docker_smoke.py recovery
+
+      - name: Run the isolated test target and real benchmark harness
+        run: |
+          docker compose exec -T redis redis-cli SET docker-test-sentinel retained
+          docker compose --profile test run --rm --build tests
+          test "$(docker compose exec -T redis redis-cli GET docker-test-sentinel)" = retained
+          docker compose --profile benchmark run --rm --build benchmark
+
+      - name: Verify development Redis and optional RedisInsight
+        run: |
+          docker compose --profile test --profile benchmark down
+          docker compose -f docker-compose.dev.yml --profile debug up -d --wait --wait-timeout 120
+          curl --fail --retry 30 --retry-delay 2 --retry-connrefused http://127.0.0.1:5540/api/health/
+
+      - name: Container logs
+        if: always()
+        run: |
+          docker compose --profile test --profile benchmark logs --no-color
+          docker compose -f docker-compose.dev.yml --profile debug logs --no-color
+
+      - name: Clean up disposable CI containers and volumes
+        if: always()
+        run: |
+          docker compose --profile test --profile benchmark --profile debug down --volumes
+          docker compose -f docker-compose.dev.yml --profile debug down --volumes

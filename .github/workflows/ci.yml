@@ -100,8 +100,18 @@ jobs:
           fail_ci_if_error: false
 
   wheel-smoke:
-    name: Wheel Install & Import Smoke Test
+    name: Wheel & Sdist Package Smoke Test
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -118,51 +128,10 @@ jobs:
       - name: Build package
         run: poetry build
 
-      - name: Verify py.typed and Lua scripts ship in the wheel
-        run: |
-          unzip -l dist/*.whl | grep 'moderato/py.typed'
-          unzip -l dist/*.whl | grep 'moderato/scripts/fixed_window.lua'
-          unzip -l dist/*.whl | grep 'moderato/scripts/token_bucket.lua'
-          unzip -l dist/*.whl | grep 'moderato/scripts/sliding_window.lua'
-
-      - name: Install wheel in a clean venv (no extras)
-        run: |
-          python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install dist/*.whl
-          /tmp/smoke/bin/pip check
-
-      - name: Core import must work without optional dependencies
-        run: |
-          /tmp/smoke/bin/python -c "
-          import moderato
-          assert moderato.RateLimiter is not None
-          assert moderato.RateLimitHeadersMiddleware is None
-          assert not hasattr(moderato, 'RateLimitMetrics')
-          for options in ({'enable_metrics': True}, {'fail_open': True}):
-              try:
-                  moderato.RateLimiter(**options)
-              except moderato.RateLimitConfigError as exc:
-                  assert 'moderato[metrics]' in str(exc)
-              else:
-                  raise AssertionError('metrics and fail-open must require the metrics extra')
-          print('clean-env core import: OK')
-          "
-
-      - name: Reinstall with [all] extra and verify full surface
-        run: |
-          /tmp/smoke/bin/pip install -q "moderato[all] @ file://$(pwd)/$(ls dist/*.whl)" --force-reinstall
-          /tmp/smoke/bin/python -c "
-          import moderato
-          from prometheus_client import generate_latest
-          assert moderato.RateLimitHeadersMiddleware is not None
-          assert moderato.RateLimitMetrics is not None
-          first = moderato.RateLimiter(enable_metrics=True)
-          second = moderato.RateLimiter(enable_metrics=True)
-          assert first.metrics is second.metrics
-          first.metrics.record_check('fixed_window', True)
-          assert b'moderato_checks_total' in generate_latest()
-          print('clean-env [all] import: OK')
-          "
+      - name: Verify distributions in isolated environments
+        run: python tests/package_smoke.py
+        env:
+          REDIS_URL: redis://localhost:6379
 
   lint:
     name: Lint & Type Check

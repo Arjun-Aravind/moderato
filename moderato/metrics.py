@@ -81,7 +81,13 @@ class RateLimitMetrics:
         self.checks_total = Counter(
             f"{self.namespace}_checks_total",
             "Total number of rate limit checks performed",
-            ["algorithm", "result"],  # result: allowed, denied
+            ["algorithm", "result"],  # result: allowed, denied, bypassed
+        )
+
+        self.fail_open_total = Counter(
+            f"{self.namespace}_fail_open_total",
+            "Total checks admitted without a backend decision under fail-open",
+            ["algorithm"],
         )
 
         self.checks_duration = Histogram(
@@ -226,6 +232,12 @@ class RateLimitMetrics:
 
         result = "allowed" if allowed else "denied"
         self.checks_total.labels(algorithm=algorithm, result=result).inc()
+
+    def record_fail_open(self, algorithm: str) -> None:
+        """Count a bypass separately from confirmed quota admissions."""
+        if self.enabled:
+            self.fail_open_total.labels(algorithm=algorithm).inc()
+            self.checks_total.labels(algorithm=algorithm, result="bypassed").inc()
 
     def record_limit_exceeded(self, algorithm: str, tenant_type: str = "default") -> None:
         """

@@ -10,8 +10,121 @@ import redis as sync_redis
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from moderato import RateLimiter, RateLimitHeadersMiddleware
+from moderato import BackendError, RateLimiter, RateLimitHeadersMiddleware
 from moderato.models import CheckResult
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("integration", ["decorator", "asgi"])
+async def test_backend_failure_returns_503_without_quota_headers(integration, monkeypatch):
+    import httpx
+
+    from moderato.decorators import RateLimitMiddleware
+
+    limiter = RateLimiter()
+
+    async def unavailable():
+        raise BackendError("redis://user:secret@host:6379 is unavailable")
+
+    monkeypatch.setattr(limiter, "connect", unavailable)
+    app = FastAPI()
+    if integration == "decorator":
+        app.add_middleware(RateLimitHeadersMiddleware)
+    else:
+        app.add_middleware(RateLimitMiddleware, limiter=limiter)
+
+    async def endpoint(request: Request):
+        pytest.fail("Fail-closed request must not execute the endpoint")
+
+    if integration == "decorator":
+        endpoint = limiter.limit("10/day")(endpoint)
+    app.get("/")(endpoint)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+    assert response.status_code == 503
+    assert response.json() == {"error": "Rate limit backend unavailable"}
+    assert not any(name.startswith("x-ratelimit-") for name in response.headers)
+    assert "retry-after" not in response.headers
+    assert "secret" not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("integration", ["headers", "asgi"])
+@pytest.mark.parametrize("operation", ["check", "get_usage", "reset", "unrelated"])
+async def test_downstream_backend_error_translation(
+    frozen_limiter, integration, operation, monkeypatch
+):
+    import httpx
+
+    from moderato.decorators import RateLimitMiddleware
+
+    manual = RateLimiter()
+
+    async def unavailable():
+        raise BackendError("backend unavailable")
+
+    monkeypatch.setattr(manual, "connect", unavailable)
+    app = FastAPI()
+    if integration == "headers":
+        app.add_middleware(RateLimitHeadersMiddleware)
+    else:
+        app.add_middleware(RateLimitMiddleware, limiter=frozen_limiter)
+
+    @app.get("/")
+    async def endpoint():
+        if operation == "unrelated":
+            raise RuntimeError("unrelated application failure")
+        elif operation == "reset":
+            await manual.reset("client")
+        else:
+            await getattr(manual, operation)("client", "10/day")
+        pytest.fail("Backend failure must not fabricate operation success")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
+    ) as client:
+        response = await client.get("/")
+    if operation == "unrelated":
+        assert response.status_code == 500
+        assert "Rate limit backend unavailable" not in response.text
+    else:
+        assert response.status_code == 503
+        assert response.json() == {"error": "Rate limit backend unavailable"}
+    assert "retry-after" not in response.headers
+    assert not any(name.startswith("x-ratelimit-") for name in response.headers)
+
+
+@pytest.mark.asyncio
+async def test_asgi_backend_failure_after_response_start_is_not_replaced(frozen_limiter):
+    from moderato.decorators import RateLimitMiddleware
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"partial", "more_body": True})
+        raise BackendError("stream failed")
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    messages = []
+
+    async def send(message):
+        messages.append(message)
+
+    middleware = RateLimitMiddleware(app, limiter=frozen_limiter)
+    with pytest.raises(BackendError, match="stream failed"):
+        await middleware(
+            {"type": "http", "path": "/", "client": ("127.0.0.1", 1234), "headers": []},
+            receive,
+            send,
+        )
+    assert [
+        message["status"] for message in messages if message["type"] == "http.response.start"
+    ] == [200]
+    assert messages[-1]["body"] == b"partial"
 
 
 @pytest.fixture

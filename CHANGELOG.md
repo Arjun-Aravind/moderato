@@ -17,10 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Valid per-request costs above policy capacity are permanent denials across all algorithms: `CheckResult` and `RateLimitExceeded` report `retry_after=None` and `reset_at=None`. HTTP integrations return 422 with no retry/reset headers; temporary denials still return 429. Custom exception handlers must use `exc.status_code` and omit `Retry-After` when `exc.retry_after` is `None`.
 - Rates are limited to 1–9,007,199,254 requests per supported period to keep scaled/weighted arithmetic within Lua's exact integer range. Invalid policies now raise `RateLimitConfigError` before Redis access in both checks and usage snapshots, and at decorator creation. `parse_rate()` continues to raise `ValueError`.
 - Lua/backend inputs now require integer scaled capacities of 1–9,007,199,254,000 and integer windows of 1–86,400 seconds. Token refill rates must be finite and between capacity/86,400 and 9,007,199,254,000 scaled units/second (full refill within a day). Independent custom refill rates raise `BackendError` if cumulative accrual exceeds the exact numeric range. Backend permanent denials use `retry_after=-1` and `reset_at=None`.
+- Backend decision failures remain fail-closed by default: manual checks raise `BackendError`, while both HTTP integrations now return 503 without quota or retry headers instead of an unhandled 500. Confirmed quota denials remain 429/422.
+- Opt-in `fail_open=True` bypasses feasible request checks on `BackendError`, with a warning and mandatory metrics. It automatically enables Prometheus collection and requires the metrics extra. Bypassed `CheckResult` values have `allowed=True` and `remaining=None`, `retry_after=None`, `reset_at=None`; integrations omit quota headers. Callers using remaining capacity must handle unknown metadata. Configuration/callback failures, cancellation, and over-capacity costs are never bypassed. Administrative APIs and eager connection/context-manager entry retain their existing failure behavior.
 
 ### Added
 
 - Decorator `cost` accepts a static positive integer as well as a per-request callback. Invalid static costs, including costs above policy capacity, raise `RateLimitConfigError` at decorator creation; callbacks are evaluated only per request.
+- `moderato_fail_open_total{algorithm}` records bypasses, also exposed as `moderato_checks_total{algorithm,result="bypassed"}` rather than confirmed admissions. Custom metrics namespaces continue to apply.
 
 ### Fixed
 
@@ -28,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
 - Permanent denial exceptions discard supplied reset timestamps, and ASGI denial responses omit reset headers when no retry is possible.
 - Oversized fixed-window requests repair a missing expiry on existing counters without changing usage, creating cold counters, or extending valid expiries.
+- Successful responses suppress quota headers if any stacked decorator bypassed its policy, regardless of order. ASGI middleware maps downstream Moderato backend errors to 503 before response start and propagates errors after response start rather than sending a second response.
 - Public token policies rebase whole-window refill progress without losing fractional credit, avoiding unbounded credited-unit counters in continuously busy buckets. Quotient/remainder arithmetic and decimal integer serialization prevent high-capacity refill rounding and scientific-notation usage parsing failures.
 - Public token retry/full-refill deadlines use the same integer credit calculation as admission, avoiding a spurious extra millisecond from floating-point division/ceiling. Slow custom backend refill rates now retain state for twice the longer of the configured window or full-refill duration, plus 60 seconds, rather than expiring before full recovery.
 

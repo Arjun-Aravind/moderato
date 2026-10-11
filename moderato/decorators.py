@@ -11,7 +11,12 @@ from typing import Any, Callable, Optional, TypeVar, Union
 import anyio
 from typing_extensions import ParamSpec
 
-from .exceptions import RateLimitCallbackError, RateLimitConfigError, RateLimitExceeded
+from .exceptions import (
+    BackendError,
+    RateLimitCallbackError,
+    RateLimitConfigError,
+    RateLimitExceeded,
+)
 from .utils import parse_rate
 
 logger = logging.getLogger(__name__)
@@ -234,14 +239,19 @@ async def _check_rate_limit(
             scope=scope,
         )
 
-        # Rate limit check passed - store usage info for headers (no extra Redis call)
+        # Any bypass in a decorator stack suppresses successful quota headers.
         if hasattr(request, "state"):
-            request.state.rate_limit_info = {
-                "limit": result.limit,
-                "remaining": result.remaining,
-                "window_seconds": result.window_seconds,
-                "reset_at": result.reset_at,
-            }
+            if result.remaining is None:
+                request.state.rate_limit_bypassed = True
+            if getattr(request.state, "rate_limit_bypassed", False):
+                request.state.rate_limit_info = None
+            else:
+                request.state.rate_limit_info = {
+                    "limit": result.limit,
+                    "remaining": result.remaining,
+                    "window_seconds": result.window_seconds,
+                    "reset_at": result.reset_at,
+                }
 
         if not result.allowed:
             raise RateLimitExceeded(
@@ -415,6 +425,13 @@ class RateLimitMiddleware:
                 rate=self.default_rate,
                 scope="middleware",
             )
+        except BackendError:
+            from starlette.responses import JSONResponse
+
+            await JSONResponse(
+                status_code=503, content={"error": "Rate limit backend unavailable"}
+            )(scope, receive, send)
+            return
         except RateLimitExceeded as e:
             result = None
             denial: Optional[Any] = e
@@ -422,7 +439,24 @@ class RateLimitMiddleware:
             denial = None if result.allowed else result
 
         if denial is None:
-            await self.app(scope, receive, send)
+            response_started = False
+
+            async def send_with_tracking(message: dict[str, Any]) -> None:
+                nonlocal response_started
+                if message["type"] == "http.response.start":
+                    response_started = True
+                await send(message)
+
+            try:
+                await self.app(scope, receive, send_with_tracking)
+            except BackendError:
+                if response_started:
+                    raise
+                from starlette.responses import JSONResponse
+
+                await JSONResponse(
+                    status_code=503, content={"error": "Rate limit backend unavailable"}
+                )(scope, receive, send)
             return
 
         retry_after = denial.retry_after

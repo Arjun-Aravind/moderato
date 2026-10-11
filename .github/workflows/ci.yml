@@ -127,12 +127,13 @@ jobs:
           assert moderato.RateLimiter is not None
           assert moderato.RateLimitHeadersMiddleware is None
           assert not hasattr(moderato, 'RateLimitMetrics')
-          try:
-              moderato.RateLimiter(enable_metrics=True)
-          except moderato.RateLimitConfigError as exc:
-              assert 'moderato[metrics]' in str(exc)
-          else:
-              raise AssertionError('metrics must require the metrics extra')
+          for options in ({'enable_metrics': True}, {'fail_open': True}):
+              try:
+                  moderato.RateLimiter(**options)
+              except moderato.RateLimitConfigError as exc:
+                  assert 'moderato[metrics]' in str(exc)
+              else:
+                  raise AssertionError('metrics and fail-open must require the metrics extra')
           print('clean-env core import: OK')
           "
 

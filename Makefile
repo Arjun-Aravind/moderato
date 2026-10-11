@@ -23,9 +23,9 @@ install: ## Install dependencies with Poetry
 
 dev: ## Start development environment (Redis only)
 	@echo "$(GREEN)Starting development environment...$(NC)"
-	docker-compose -f docker-compose.dev.yml up -d
+	docker compose -f docker-compose.dev.yml up -d --wait
 	@echo "$(GREEN)Redis is running on localhost:6379$(NC)"
-	@echo "$(GREEN)RedisInsight is available at http://localhost:8001$(NC)"
+	@echo "$(GREEN)Optional RedisInsight: docker compose -f docker-compose.dev.yml --profile debug up -d$(NC)"
 
 test: ## Run test suite
 	@echo "$(GREEN)Running tests...$(NC)"
@@ -97,7 +97,7 @@ clean: ## Clean up cache and build files
 
 docker-up: ## Start all services with Docker Compose
 	@echo "$(GREEN)Starting Docker services...$(NC)"
-	docker-compose up -d
+	docker compose up -d --build --wait
 	@echo "$(GREEN)Services started:$(NC)"
 	@echo "  - FastAPI Demo: http://localhost:8000"
 	@echo "  - Multi-tenant Demo: http://localhost:8001"
@@ -105,15 +105,15 @@ docker-up: ## Start all services with Docker Compose
 
 docker-down: ## Stop all Docker services
 	@echo "$(YELLOW)Stopping Docker services...$(NC)"
-	docker-compose down
+	docker compose --profile test --profile benchmark --profile debug down
 
 docker-test: ## Run tests in Docker
 	@echo "$(GREEN)Running tests in Docker...$(NC)"
-	docker-compose --profile test run --rm tests
+	docker compose --profile test run --rm --build tests
 
 docker-build: ## Build Docker images
 	@echo "$(GREEN)Building Docker images...$(NC)"
-	docker-compose build
+	docker compose build
 
 benchmark: ## Run performance benchmark
 	@echo "$(GREEN)Running performance benchmark...$(NC)"
@@ -125,7 +125,7 @@ benchmark-quick: ## Run quick performance benchmark
 
 benchmark-docker: ## Run performance benchmark in Docker
 	@echo "$(GREEN)Running performance benchmark in Docker...$(NC)"
-	docker-compose --profile benchmark run --rm benchmark
+	docker compose --profile benchmark run --rm --build benchmark
 
 ci: test-all benchmark-quick ## Run CI checks (tests + quick benchmark)
 	@echo "$(GREEN)CI checks completed$(NC)"

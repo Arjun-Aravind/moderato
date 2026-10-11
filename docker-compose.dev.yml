@@ -1,32 +1,41 @@
 # Development docker-compose configuration
-# Usage: docker-compose -f docker-compose.dev.yml up
+# Usage: docker compose -f docker-compose.dev.yml up -d
 
-version: '3.8'
+name: moderato-dev
 
 services:
   redis:
     image: redis:7-alpine
-    container_name: moderato-redis-dev
     ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes --loglevel debug
+      - "127.0.0.1:6379:6379"
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
     volumes:
       - ./data/redis:/data
     networks:
       - moderato-dev
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis-insight:
-    image: redislabs/redisinsight:latest
-    container_name: moderato-redis-insight
+    image: redis/redisinsight:latest
     ports:
-      - "8001:8001"
+      - "127.0.0.1:5540:5540"
     volumes:
-      - ./data/redisinsight:/db
+      - redisinsight_data:/data
     networks:
       - moderato-dev
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+    profiles:
+      - debug
 
 networks:
   moderato-dev:
     driver: bridge
+
+volumes:
+  redisinsight_data:

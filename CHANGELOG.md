@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sliding backend validation now rejects fractional capacity consistently through both cached EVALSHA and fallback EVAL, without mutating Redis. Documented the existing conditional `reset()` default (all algorithms without a tenant, configured algorithm for a specific tenant), corrected fixed-window boundary-burst guidance, and updated security support/version and refill notes.
 - Token bucket recovery timestamps and retry delays account for fractional progress and the actual depletion time of a full bucket.
 - Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
 - Permanent denial exceptions discard supplied reset timestamps, and ASGI denial responses omit reset headers when no retry is possible.

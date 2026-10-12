@@ -530,9 +530,10 @@ class TestAlgorithmAwareReset:
         result = await limiter.check(key=key, rate=rate, algorithm="sliding_window")
         assert result is True
 
-    async def test_reset_all_algorithms(self, clean_limiter):
-        """Test reset with algorithm='all' clears all types."""
-        limiter = clean_limiter
+    @pytest.mark.parametrize("algorithm", ["all", None])
+    async def test_reset_all_algorithms(self, frozen_limiter, algorithm):
+        """Without a tenant, omitted algorithm and 'all' both clear all types."""
+        limiter = frozen_limiter
         key = f"reset-all-{uuid4().hex}"
         rate = "5/minute"
 
@@ -547,7 +548,7 @@ class TestAlgorithmAwareReset:
                 await limiter.check(key=key, rate=rate, algorithm=algo)
 
         # Reset all
-        result = await limiter.reset(key=key, algorithm="all")
+        result = await limiter.reset(key=key, algorithm=algorithm)
         assert result is True
 
         # All should work again

@@ -171,8 +171,8 @@ def get_time_window(window_seconds: int, timestamp: Optional[int] = None) -> str
     Uses epoch-based alignment to ensure consistent window boundaries:
     - window_start = timestamp - (timestamp % window_seconds)
 
-    This prevents the "boundary burst" problem where requests at the end
-    of one window and start of another can exceed the intended rate.
+    Alignment does not prevent fixed-window boundary bursts: a full quota
+    can be admitted on each side of a boundary within a short interval.
 
     Args:
         window_seconds: Size of the time window in seconds

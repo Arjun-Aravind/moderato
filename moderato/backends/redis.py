@@ -445,7 +445,7 @@ class RedisBackend:
                         self._script_shas["sliding_window"],
                         1,  # number of keys
                         key_prefix.encode(),  # KEYS[1]
-                        str(int(max_requests)).encode(),  # ARGV[1]
+                        str(max_requests).encode(),  # ARGV[1]
                         str(window_seconds).encode(),  # ARGV[2]
                         str(cost).encode(),  # ARGV[3]
                     )

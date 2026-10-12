@@ -543,8 +543,9 @@ class RateLimiter:
 
         Args:
             key: Unique identifier for the rate limit
-            algorithm: Algorithm used (defaults to config.default_algorithm).
-                       Use "all" to reset keys for all algorithms.
+            algorithm: If omitted, resets all algorithms when tenant_type is
+                       None, or config.default_algorithm for a specific tenant.
+                       Use "all" explicitly to reset all algorithms.
             tenant_type: Tenant type to reset (e.g., "free", "premium").
                          Defaults to None which resets ALL tenant types for
                          this key. Pass "default" explicitly to reset only

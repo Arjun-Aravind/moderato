@@ -281,7 +281,32 @@ async def _check_rate_limit(
 def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
     request_scope = getattr(request, "scope", {})
     method = getattr(request, "method", None) or request_scope.get("method", "*")
-    root_path = request_scope.get("root_path", "").rstrip("/")
+    root_path = request_scope.get("app_root_path", request_scope.get("root_path", "")).rstrip("/")
+    routes = getattr(request_scope.get("router"), "routes", [])
+    if routes:
+        from starlette import routing
+
+        # The outer router survives nested mounts. Replay its matching on a
+        # copy to recover declared templates, not dynamic mount values.
+        matching_scope = dict(request_scope, root_path=root_path, path_params={})
+        if not hasattr(routing, "get_route_path"):
+            # Older Starlette mounts shorten path; newer versions retain it.
+            mount_path = request_scope.get("root_path", "")[len(root_path) :]
+            matching_scope["path"] = mount_path + request_scope["path"]
+        template = root_path
+        while routes:
+            for candidate in routes:
+                match, child_scope = candidate.matches(matching_scope)
+                if match.name == "FULL":
+                    matching_scope.update(child_scope)
+                    template += getattr(candidate, "path", "")
+                    children = getattr(candidate, "routes", None)
+                    if children is None:
+                        return f"{method}:{template}"
+                    routes = children
+                    break
+            else:
+                break
     route = request_scope.get("route")
     route_path = getattr(route, "path", None)
     if route_path:

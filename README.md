@@ -268,7 +268,10 @@ async def smooth_endpoint(request: Request):
 
 Decorated endpoints use separate method, mount/root-path, and route-template scopes
 by default. Parameter values within one route still share a quota for the same
-identity; mounting the same route under different prefixes isolates its quotas.
+identity, including parameters in mount templates. Different mount templates
+isolate their quotas. Template discovery supports FastAPI and Starlette routing
+trees; use an explicit scope for opaque ASGI mounts or custom path-rewriting
+middleware where the original routing tree cannot be recovered.
 Set `scope` to share one bucket explicitly, including across mounts:
 
 ```python

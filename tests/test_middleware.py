@@ -69,7 +69,8 @@ async def test_example_usage_outage_returns_503(example, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("integration", ["decorator", "asgi"])
-async def test_backend_failure_returns_503_without_quota_headers(integration, monkeypatch):
+@pytest.mark.parametrize("mounted", [False, True])
+async def test_backend_failure_returns_503_without_quota_headers(integration, mounted, monkeypatch):
     import httpx
 
     from moderato.decorators import RateLimitMiddleware
@@ -92,11 +93,15 @@ async def test_backend_failure_returns_503_without_quota_headers(integration, mo
     if integration == "decorator":
         endpoint = limiter.limit("10/day")(endpoint)
     app.get("/")(endpoint)
+    if mounted:
+        parent = FastAPI()
+        parent.mount("/child", app)
+        app = parent
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://test"
     ) as client:
-        response = await client.get("/")
+        response = await client.get("/child/" if mounted else "/")
     assert response.status_code == 503
     assert response.json() == {"error": "Rate limit backend unavailable"}
     assert not any(name.startswith("x-ratelimit-") for name in response.headers)

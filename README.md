@@ -295,6 +295,13 @@ from moderato import RateLimitHeadersMiddleware
 app.add_middleware(RateLimitHeadersMiddleware)
 ```
 
+For mounted FastAPI/Starlette subapplications, install the middleware on each
+child that uses Moderato, not only on the parent. A child's error middleware
+can send a 500 before propagating an unhandled `BackendError` to the parent;
+parent middleware cannot replace a response that has already started. The
+same placement requirement applies to `RateLimitMiddleware` when it must
+translate downstream errors inside a child application.
+
 **Headers added to decorated responses:**
 - `X-RateLimit-Limit`: Maximum requests allowed
 - `X-RateLimit-Remaining`: Whole unit-cost requests that fit the remaining capacity,

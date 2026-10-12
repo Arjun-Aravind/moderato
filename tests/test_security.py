@@ -762,15 +762,16 @@ class TestPolicyIsolation:
             await limiter.close()
 
     @pytest.mark.asyncio
-    async def test_reset_with_policy_shaped_tenant(self, redis_url):
+    async def test_reset_with_policy_shaped_tenant(self, frozen_limiter):
         """A tenant type literally named like a policy (p100x60) must still reset.
 
         The suffix classifier decides whether the suffix starts with a tenant
         from the scan shape, never from the tenant's text, so a tenant whose
         name matches p{limit}x{window} cannot evade reset().
         """
-        limiter = RateLimiter(redis_url=redis_url, key_prefix="policy-shaped-tenant")
-        await limiter.connect()
+        # Exercise real Lua without letting a one-second boundary refresh quota
+        # midway through the exact-count reset assertion on a busy CI runner.
+        limiter = frozen_limiter
         try:
             key = f"shaped-{uuid4().hex}"
 

@@ -266,7 +266,13 @@ async def smooth_endpoint(request: Request):
 
 #### Share a limit across routes
 
-Decorated endpoints use separate method-and-route scopes by default. Set `scope` to share one bucket:
+Decorated endpoints use separate method, mount/root-path, and route-template scopes
+by default. Parameter values within one route still share a quota for the same
+identity, including parameters in mount templates. Different mount templates
+isolate their quotas. Template discovery supports FastAPI and Starlette routing
+trees; use an explicit scope for opaque ASGI mounts or custom path-rewriting
+middleware where the original routing tree cannot be recovered.
+Set `scope` to share one bucket explicitly, including across mounts:
 
 ```python
 @limiter.limit("100/minute", scope="search-api")
@@ -274,7 +280,10 @@ async def search(request: Request):
     ...
 ```
 
-Manual `check()` calls use the `"global"` scope unless you pass one explicitly.
+Manual `check()` and `get_usage()` calls use the `"global"` scope unless you pass
+one explicitly. To read a decorated endpoint's usage, use its same identity,
+policy, tenant, algorithm, and scope. A shared explicit scope avoids coupling
+usage endpoints to a deployment's mount path.
 
 ### Automatic Headers
 

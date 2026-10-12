@@ -7,6 +7,106 @@ import pytest
 from moderato import RateLimitCallbackError, RateLimitExceeded
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared_scope", [False, True])
+@pytest.mark.parametrize("dynamic_mount", [False, True])
+@pytest.mark.parametrize("root_path", ["", "/proxy", "/proxy/"])
+async def test_mounted_routes_isolate_default_scopes(
+    frozen_limiter, shared_scope, dynamic_mount, root_path
+):
+    import httpx
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    from starlette import routing
+
+    app = FastAPI()
+    first = FastAPI()
+    second = FastAPI()
+    nested = FastAPI()
+
+    async def denied(request, exc):
+        return JSONResponse(status_code=exc.status_code, content={"error": "limited"})
+
+    for child in (first, second):
+        child.add_exception_handler(RateLimitExceeded, denied)
+
+    @frozen_limiter.limit("1/day", scope="shared-api" if shared_scope else None)
+    async def endpoint(request: Request, item_id: str):
+        return {"item": item_id}
+
+    first.get("/items/{item_id}")(endpoint)
+    second.get("/items/{item_id}")(endpoint)
+    app.mount("/orgs/{org}" if dynamic_mount else "/first", first)
+    nested.mount("/second", second)
+    app.mount("/nested", nested)
+
+    # Newer Starlette retains the proxy-prefixed path; older mounts shorten it.
+    proxy_prefix = root_path if hasattr(routing, "get_route_path") else ""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, root_path=root_path), base_url="http://test"
+    ) as client:
+        prefix = proxy_prefix + ("/orgs/a" if dynamic_mount else "/first")
+        assert (await client.get(f"{prefix}/items/one")).status_code == 200
+        # Parameter values must not create fresh quotas for the same route.
+        assert (await client.get(f"{prefix}/items/two")).status_code == 429
+        if dynamic_mount:
+            assert (await client.get(f"{proxy_prefix}/orgs/b/items/one")).status_code == 429
+        other = await client.get(f"{proxy_prefix}/nested/second/items/one")
+        assert other.status_code == (429 if shared_scope else 200)
+
+
+@pytest.mark.asyncio
+async def test_starlette_routes_with_shared_handler_keep_separate_templates(frozen_limiter):
+    import httpx
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+
+    async def denied(request, exc):
+        return JSONResponse(status_code=exc.status_code, content={"error": "limited"})
+
+    @frozen_limiter.limit("1/day")
+    async def endpoint(request):
+        return JSONResponse({"item": request.path_params["item"]})
+
+    child = Starlette(
+        routes=[Route("/one/{item}", endpoint), Route("/two/{item}", endpoint)],
+        exception_handlers={RateLimitExceeded: denied},
+    )
+    app = Starlette(routes=[Mount("/child", app=child)])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        assert (await client.get("/child/one/a")).status_code == 200
+        assert (await client.get("/child/one/b")).status_code == 429
+        assert (await client.get("/child/two/a")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_example_user_usage_reads_admission_scope(redis_url, monkeypatch):
+    from uuid import uuid4
+
+    import httpx
+
+    from examples import fastapi_app
+
+    limiter = fastapi_app.limiter
+    monkeypatch.setattr(limiter.config, "redis_url", redis_url)
+    monkeypatch.setattr(limiter.config, "key_prefix", f"test:example:{uuid4().hex}")
+    await limiter.connect()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=fastapi_app.app), base_url="http://test"
+        ) as client:
+            assert (await client.get("/api/user/review-user")).status_code == 200
+            response = await client.get("/api/usage/review-user")
+        assert response.status_code == 200
+        assert response.json()["current_requests"] == 1
+        assert response.json()["remaining"] == 99
+    finally:
+        await limiter.close()
+
+
 class TestDecorators:
     """Test suite for decorator functionality."""
 
@@ -47,6 +147,9 @@ class TestDecorators:
         other_route_request = mock_request()
         other_route_request.method = "GET"
         other_route_request.scope = {"method": "GET", "route": OtherRoute()}
+        mounted_request = mock_request()
+        mounted_request.method = "GET"
+        mounted_request.scope = {"method": "GET", "route": Route(), "root_path": "/proxy"}
 
         @clean_limiter.limit("2/minute")
         async def endpoint(request):
@@ -58,6 +161,7 @@ class TestDecorators:
             await endpoint(get_request)
         assert await endpoint(post_request) == "POST"
         assert await endpoint(other_route_request) == "GET"
+        assert await endpoint(mounted_request) == "GET"
 
     @pytest.mark.asyncio
     async def test_explicit_scope_shares_a_bucket(self, clean_limiter, mock_request):

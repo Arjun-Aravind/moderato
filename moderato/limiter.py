@@ -493,7 +493,8 @@ class RateLimiter:
             trust_proxy_headers: If True, trust X-Forwarded-For headers for IP.
                                Only enable if behind a trusted reverse proxy.
             scope: Shared bucket name. By default, each method, mount/root path,
-                and route template is isolated. Path parameter values share a quota
+                and route template is isolated. Path parameters do not affect scope;
+                the configured key still determines the identity
 
         Returns:
             Decorator function for rate limiting

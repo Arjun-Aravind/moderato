@@ -152,7 +152,9 @@ async def strict_endpoint(request: Request):
 
 
 @app.get("/api/user/{user_id}")
-@limiter.limit("100/hour", key=lambda req: f"user:{req.path_params.get('user_id')}")
+@limiter.limit(
+    "100/hour", key=lambda req: f"user:{req.path_params.get('user_id')}", scope="user-api"
+)
 async def user_endpoint(request: Request, user_id: str):
     """
     Per-user rate limiting.
@@ -238,7 +240,7 @@ async def status_endpoint():
 async def usage_endpoint(user_id: str):
     """Check rate limit usage for a specific user."""
     try:
-        usage = await limiter.get_usage(key=f"user:{user_id}", rate="100/hour")
+        usage = await limiter.get_usage(key=f"user:{user_id}", rate="100/hour", scope="user-api")
 
         return {
             "user_id": user_id,

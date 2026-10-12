@@ -54,7 +54,7 @@ def create_limit_decorator(
         algorithm: Algorithm to use for rate limiting
         cost_func: Positive integer cost or function calculating it per request
         trust_proxy_headers: Whether to trust forwarded client IP headers
-        scope: Shared bucket name. Defaults to the request method and route.
+        scope: Shared bucket name. Defaults to method, mount/root path, and route template.
 
     Returns:
         Decorator function
@@ -281,12 +281,15 @@ async def _check_rate_limit(
 def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
     request_scope = getattr(request, "scope", {})
     method = getattr(request, "method", None) or request_scope.get("method", "*")
+    root_path = request_scope.get("root_path", "").rstrip("/")
     route = request_scope.get("route")
     route_path = getattr(route, "path", None)
     if route_path:
-        return f"{method}:{route_path}"
+        return f"{method}:{root_path}{route_path}"
     module = getattr(func, "__module__", func.__class__.__module__)
     name = getattr(func, "__qualname__", func.__class__.__qualname__)
+    if root_path:
+        return f"{method}:{root_path}:{module}.{name}"
     return f"{method}:{module}.{name}"
 
 

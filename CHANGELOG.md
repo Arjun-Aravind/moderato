@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Redis URL logging redacts percent-encoded credential query names as well as ordinary password parameters, including duplicate parameters. Redaction uses the normalized, parsed query so URL path text and literal tab/newline characters cannot hide credentials. Non-credential query options remain visible for diagnostics.
 - Token bucket recovery timestamps and retry delays account for fractional progress and the actual depletion time of a full bucket.
 - Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
 - Permanent denial exceptions discard supplied reset timestamps, and ASGI denial responses omit reset headers when no retry is possible.

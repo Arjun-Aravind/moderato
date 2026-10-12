@@ -710,22 +710,24 @@ def _redact_redis_url(url: str) -> str:
             if parsed.port:
                 new_netloc += f":{parsed.port}"
 
-            # Rebuild URL with redacted password
-            redacted = parsed._replace(netloc=new_netloc)
-            return _redact_query_passwords(urlunparse(redacted))
-        return _redact_query_passwords(url)
+            parsed = parsed._replace(netloc=new_netloc)
+        # Match redis-py's URL normalization before inspecting query names.
+        # Scan only the query, never path text that can contain '&' or '='.
+        return urlunparse(parsed._replace(query=_redact_query_passwords(parsed.query)))
     except Exception:
         # If parsing fails, return a safe generic message
         return "redis://[URL_PARSE_ERROR]"
 
 
-def _redact_query_passwords(url: str) -> str:
-    """Redact credential-bearing query parameters (e.g. ?password=secret)."""
+def _redact_query_passwords(query: str) -> str:
+    """Redact credential parameters in an already parsed query string."""
     import re
+    from urllib.parse import unquote_plus
 
-    return re.sub(
-        r"([?&])(?:password|pwd)=([^&]*)",
-        r"\1password=[REDACTED]",
-        url,
-        flags=re.IGNORECASE,
-    )
+    def redact_parameter(match: re.Match[str]) -> str:
+        # redis-py decodes query names before interpreting connection options.
+        if unquote_plus(match.group(2)).lower() in ("password", "pwd"):
+            return f"{match.group(1)}password=[REDACTED]"
+        return match.group(0)
+
+    return re.sub(r"(^|&)([^=&]+)=([^&]*)", redact_parameter, query)

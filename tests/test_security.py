@@ -227,18 +227,36 @@ class TestPasswordRedaction:
         assert "[REDACTED]" in redacted
         assert "localhost" in redacted
 
-    def test_password_not_in_init_log(self, caplog):
+    @pytest.mark.parametrize(
+        "redis_url",
+        [
+            "redis://user:mysecretpassword@localhost:6379",
+            "redis://localhost:6379?db=1&pass%77ord=mysecretpassword&socket_timeout=2",
+            "redis://localhost:6379?%70%77%64=mysecretpassword",
+            "redis://localhost:6379?password=mysecretpassword&pass%77ord=mysecretpassword",
+            "redis://localhost:6379/&x=?password=mysecretpassword&db=0",
+            "redis://localhost:6379/&x=?pass%77ord=mysecretpassword&db=0",
+            "redis://localhost:6379?pass\tword=mysecretpassword",
+            "redis://localhost:6379?pass\nword=mysecretpassword",
+            "redis://localhost:6379?pass\rword=mysecretpassword",
+        ],
+    )
+    def test_password_not_in_init_log(self, caplog, redis_url):
         """RateLimiter initialization must not expose Redis passwords in debug logs."""
         import logging
 
         from moderato import RateLimiter
 
         caplog.set_level(logging.DEBUG, logger="moderato.limiter")
-        RateLimiter(redis_url="redis://user:mysecretpassword@localhost:6379")
+        RateLimiter(redis_url=redis_url)
 
         log_text = "\n".join(record.getMessage() for record in caplog.records)
         assert "mysecretpassword" not in log_text
         assert "[REDACTED]" in log_text
+        assert "localhost:6379" in log_text
+        if "db=1" in redis_url:
+            assert "db=1" in log_text
+            assert "socket_timeout=2" in log_text
 
 
 class TestProxyHeaderSecurity:
@@ -749,15 +767,16 @@ class TestPolicyIsolation:
             await limiter.close()
 
     @pytest.mark.asyncio
-    async def test_reset_with_policy_shaped_tenant(self, redis_url):
+    async def test_reset_with_policy_shaped_tenant(self, frozen_limiter):
         """A tenant type literally named like a policy (p100x60) must still reset.
 
         The suffix classifier decides whether the suffix starts with a tenant
         from the scan shape, never from the tenant's text, so a tenant whose
         name matches p{limit}x{window} cannot evade reset().
         """
-        limiter = RateLimiter(redis_url=redis_url, key_prefix="policy-shaped-tenant")
-        await limiter.connect()
+        # Exercise real Lua without letting a one-second boundary refresh quota
+        # midway through the exact-count reset assertion on a busy CI runner.
+        limiter = frozen_limiter
         try:
             key = f"shaped-{uuid4().hex}"
 

@@ -9,7 +9,8 @@ from moderato import RateLimitCallbackError, RateLimitExceeded
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shared_scope", [False, True])
-async def test_mounted_routes_isolate_default_scopes(frozen_limiter, shared_scope):
+@pytest.mark.parametrize("dynamic_mount", [False, True])
+async def test_mounted_routes_isolate_default_scopes(frozen_limiter, shared_scope, dynamic_mount):
     import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
@@ -31,18 +32,48 @@ async def test_mounted_routes_isolate_default_scopes(frozen_limiter, shared_scop
 
     first.get("/items/{item_id}")(endpoint)
     second.get("/items/{item_id}")(endpoint)
-    app.mount("/first", first)
+    app.mount("/orgs/{org}" if dynamic_mount else "/first", first)
     nested.mount("/second", second)
     app.mount("/nested", nested)
 
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        assert (await client.get("/first/items/one")).status_code == 200
+        prefix = "/orgs/a" if dynamic_mount else "/first"
+        assert (await client.get(f"{prefix}/items/one")).status_code == 200
         # Parameter values must not create fresh quotas for the same route.
-        assert (await client.get("/first/items/two")).status_code == 429
+        assert (await client.get(f"{prefix}/items/two")).status_code == 429
+        if dynamic_mount:
+            assert (await client.get("/orgs/b/items/one")).status_code == 429
         other = await client.get("/nested/second/items/one")
         assert other.status_code == (429 if shared_scope else 200)
+
+
+@pytest.mark.asyncio
+async def test_starlette_routes_with_shared_handler_keep_separate_templates(frozen_limiter):
+    import httpx
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Mount, Route
+
+    async def denied(request, exc):
+        return JSONResponse(status_code=exc.status_code, content={"error": "limited"})
+
+    @frozen_limiter.limit("1/day")
+    async def endpoint(request):
+        return JSONResponse({"item": request.path_params["item"]})
+
+    child = Starlette(
+        routes=[Route("/one/{item}", endpoint), Route("/two/{item}", endpoint)],
+        exception_handlers={RateLimitExceeded: denied},
+    )
+    app = Starlette(routes=[Mount("/child", app=child)])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        assert (await client.get("/child/one/a")).status_code == 200
+        assert (await client.get("/child/one/b")).status_code == 429
+        assert (await client.get("/child/two/a")).status_code == 200
 
 
 @pytest.mark.asyncio

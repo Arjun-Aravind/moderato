@@ -33,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Sliding backend validation now rejects fractional capacity consistently through both cached EVALSHA and fallback EVAL, without mutating Redis. Documented the existing conditional `reset()` default (all algorithms without a tenant, configured algorithm for a specific tenant), corrected fixed-window boundary-burst guidance, and updated security support/version and refill notes.
 - Token bucket recovery timestamps and retry delays account for fractional progress and the actual depletion time of a full bucket.
 - Rate-limit headers preserve a denial exception's remaining capacity instead of replacing it with zero.
 - Permanent denial exceptions discard supplied reset timestamps, and ASGI denial responses omit reset headers when no retry is possible.
@@ -45,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Both HTTP examples install the error/header middleware, returning 503 rather than 500 on backend outages. The FastAPI demo exposes quota/retry headers to cross-origin browser clients. The multi-tenant demo has a readiness endpoint; Docker checks the configured port and Redis readiness rather than accepting any successful HTTP response. Docker smoke checks tolerate existing quota usage while still checking fresh admission, denial headers, and outage failures.
 - Public token policies rebase whole-window refill progress without losing fractional credit, avoiding unbounded credited-unit counters in continuously busy buckets. Quotient/remainder arithmetic and decimal integer serialization prevent high-capacity refill rounding and scientific-notation usage parsing failures.
 - Public token retry/full-refill deadlines use the same integer credit calculation as admission, avoiding a spurious extra millisecond from floating-point division/ceiling. Slow custom backend refill rates now retain state for twice the longer of the configured window or full-refill duration, plus 60 seconds, rather than expiring before full recovery.
+- Sliding backend validation now rejects fractional capacity consistently through both cached EVALSHA and fallback EVAL, without mutating Redis. Documented the existing conditional `reset()` default (all algorithms without a tenant, configured algorithm for a specific tenant), corrected fixed-window boundary-burst guidance, and updated security support/version and refill notes.
 
 ## v0.4.0 (2026-10-07)
 

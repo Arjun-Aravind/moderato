@@ -63,8 +63,9 @@ controls JSON size; the measurements are identical either way.
 - Comparison levels must return exactly the expected 200/429 distribution:
   all 200 for allowed/plain runs; a total of 100 allowed per limited level,
   not per trial. Unexpected 503s, redirects, extra rejects or extra allows
-  fail the run. Status mismatch JSON retains observed/expected counts and
-  partial evidence under `failure`; it is not a successful performance run.
+  fail the run. Status mismatch JSON retains counts under `failure` and
+  completed scenarios at the top level. Timings for the failed level are
+  discarded; this is not a successful performance run.
 - The quick tenant mix is 14/5/1 (free/premium/enterprise), matching the full
   profile's 70/25/5 proportions. Both profiles disclose actual tier counts.
 - Native `limits-async` uses limits 5.8.0's `RedisStorage` with
@@ -83,6 +84,10 @@ controls JSON size; the measurements are identical either way.
 - Accuracy remains one burst per algorithm per run, and pool capacity one
   probe per level. These are checks, not repeated-trial estimates. Raising
   the benchmark pool is not a recommendation for every deployment.
+  The pool probe records utilization, not guaranteed saturation: the
+  integrated quick run peaked at 13/50 connections, so it did not exercise
+  the 50-connection boundary. Older JSON's boundary-coverage note overstates
+  what was observed and is preserved as historical output, not endorsed.
 
 Benchmark regressions run with `python -m pytest benchmarks/test_harness.py`.
 They start disposable Redis themselves without FLUSHDB; the native async
@@ -104,7 +109,9 @@ file hashes/manifest when comparing these runs to later integrated code.
 After integration, [`s4-integration-quick.json`](benchmarks/results/s4-integration-quick.json)
 and [`s4-integration-compare.json`](benchmarks/results/s4-integration-compare.json)
 repeat the 64-character-ID quick check and one-trial comparison with TCP
-controls on the integrated dirty tree, including Git-free provenance support.
+controls on the integrated dirty tree; both recorded available Git metadata.
+Git-free behavior is checked separately by the provenance regressions and
+installed-wheel Docker benchmark in CI, not demonstrated by these JSONs.
 These retain their own source hashes and environment manifest; they are
 additional harness smoke evidence, not matched production measurements.
 

@@ -6,12 +6,13 @@ from importlib.metadata import distributions
 from pathlib import Path
 from typing import Any
 
-import moderato
-
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def collect_provenance() -> dict[str, Any]:
+    # Keep module import dependency-free for the comparison venv bootstrap.
+    import moderato
+
     def git(*args: str) -> str:
         return subprocess.check_output(
             ["git", *args], cwd=ROOT, text=True, stderr=subprocess.DEVNULL

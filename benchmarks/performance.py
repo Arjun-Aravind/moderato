@@ -260,7 +260,7 @@ class PerformanceBenchmark:
         # ~50 true concurrency with redis-py's non-blocking pool, which would
         # clip the high-concurrency levels. Raise it through the public
         # RateLimitConfig field so scaling sections measure the limiter, and
-        # measure the default-pool boundary separately (pool_capacity probe).
+        # observe default-pool utilization separately (pool_capacity probe).
         self.limiter = RateLimiter(redis_url=self.redis_url, key_prefix=self.key_prefix)
         self.limiter.config.max_connections = self.pool_size
         start = time.perf_counter()
@@ -686,20 +686,19 @@ class PerformanceBenchmark:
         print()
 
     async def benchmark_pool_capacity(self) -> None:
-        """Probe the default connection pool under rising true concurrency.
+        """Observe default connection-pool utilization as worker count rises.
 
         The shipped default pool (max_connections=50) rejects a borrow once
         no connection is idle and all 50 are checked out (redis-py raises
         ``Too many connections``). This probe splits 1,000 checks across
-        ``num_clients`` workers so exactly ``num_clients`` checks are in
-        flight, and records both rejections and the observed peak pool
-        usage per level: on a localhost Redis each check completes before
-        many workers overlap, so the boundary is timing- and
-        deployment-dependent rather than a fixed client count.
+        ``num_clients`` workers, and records rejections and observed peak
+        pool usage per level. Workers do not guarantee simultaneous borrows:
+        local checks may finish before many workers overlap. This is not
+        saturation or boundary coverage when the observed peak stays below 50.
         """
         levels = [25, 50, 75, 100, 200]
         checks_per_level = 1000
-        print(f"Default pool capacity probe (levels {levels}, {checks_per_level} checks)")
+        print(f"Default pool utilization probe (levels {levels}, {checks_per_level} checks)")
         print("-" * 60)
 
         from moderato import BackendError
@@ -744,9 +743,8 @@ class PerformanceBenchmark:
                     level: int = num_clients,
                     tally: dict[str, int] = outcomes,
                 ) -> None:
-                    # Stride the check indexes across workers so exactly
-                    # ``level`` checks are in flight at a time; scheduling all
-                    # checks as one coroutine wave would never vary concurrency.
+                    # Stride indexes to vary worker count, not to guarantee
+                    # that every worker holds a pooled connection at once.
                     for i in range(worker_id, checks_per_level, level):
                         try:
                             await probe_limiter.check(
@@ -894,8 +892,8 @@ class PerformanceBenchmark:
                 "connection_pool_size": self.pool_size,
                 "connection_pool_note": (
                     "raised from the default 50 via RateLimitConfig.max_connections so "
-                    "high-concurrency levels measure the limiter; the default-pool "
-                    "boundary is measured in results.pool_capacity"
+                    "high-concurrency levels measure the limiter; results.pool_capacity "
+                    "records utilization, not guaranteed saturation or boundary coverage"
                 ),
             },
             "results": self.results,

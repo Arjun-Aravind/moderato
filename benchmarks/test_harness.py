@@ -7,8 +7,10 @@ import argparse
 import json
 import socket
 import subprocess
+import sys
 import time
 from collections import Counter
+from pathlib import Path
 
 import pytest
 import redis.asyncio as redis
@@ -179,8 +181,15 @@ async def test_scheduling_control_detects_blocking_endpoint():
     assert result["levels"][0]["scheduling_delay_ms"]["max"] >= 20
 
 
-async def test_failed_run_writes_counts_and_provenance(disposable_redis, tmp_path, monkeypatch):
+@pytest.mark.parametrize("git_metadata", [True, False])
+async def test_failed_run_writes_counts_and_provenance(
+    disposable_redis, tmp_path, monkeypatch, git_metadata
+):
     from benchmarks import compare_libraries as comparison
+    from benchmarks import provenance
+
+    if not git_metadata:
+        monkeypatch.setattr(provenance, "ROOT", tmp_path)
 
     calls = 0
 
@@ -206,7 +215,10 @@ async def test_failed_run_writes_counts_and_provenance(disposable_redis, tmp_pat
     assert payload["failure"]["status_counts"] == {"503": 4}
     assert payload["failure"]["expected_status_counts"] == {"200": 4}
     assert payload["scenarios"] == {}
-    assert len(payload["provenance"]["source_sha"]) == 40
+    sha = payload["provenance"]["source_sha"]
+    assert sha is None or len(sha) == 40
+    if not git_metadata:
+        assert sha is None
     assert "moderato/scripts/fixed_window.lua" in payload["provenance"]["sha256"]
     assert payload["provenance"]["installed_dependencies"]["redis"]
 
@@ -260,3 +272,19 @@ def test_provenance_without_checkout_or_git(tmp_path, monkeypatch, git_available
     assert "unknown" in result["source_note"]
     assert len(result["sha256"]["moderato/scripts/token_bucket.lua"]) == 64
     assert result["installed_dependencies"]["redis"]
+
+
+def test_comparison_cli_before_dependency_bootstrap(tmp_path):
+    environment = tmp_path / "empty-venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True)
+    result = subprocess.run(
+        [
+            str(environment / "bin/python"),
+            str(Path(__file__).with_name("compare_libraries.py")),
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "--venv" in result.stdout

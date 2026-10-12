@@ -288,3 +288,26 @@ def test_comparison_cli_before_dependency_bootstrap(tmp_path):
         check=True,
     )
     assert "--venv" in result.stdout
+
+
+def test_git_free_provenance_distinguishes_installed_python(tmp_path, monkeypatch):
+    import moderato
+    from benchmarks import provenance
+
+    package = tmp_path / "site-packages" / "moderato"
+    (package / "scripts").mkdir(parents=True)
+    (package / "__init__.py").write_text('__version__ = "0.5.0"\n')
+    (package / "scripts" / "fixed_window.lua").write_text("return 1\n")
+    implementation = package / "limiter.py"
+    implementation.write_text("VALUE = 1\n")
+    monkeypatch.setattr(moderato, "__file__", str(package / "__init__.py"))
+    monkeypatch.setattr(provenance, "ROOT", tmp_path)
+    first = provenance.collect_provenance()
+    implementation.write_text("VALUE = 2\n")
+    second = provenance.collect_provenance()
+    assert first["source_sha"] is None and second["source_sha"] is None
+    assert first["sha256"]["moderato/limiter.py"] != second["sha256"]["moderato/limiter.py"]
+    assert (
+        first["sha256"]["moderato/scripts/fixed_window.lua"]
+        == second["sha256"]["moderato/scripts/fixed_window.lua"]
+    )

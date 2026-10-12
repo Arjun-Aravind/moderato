@@ -42,7 +42,7 @@ jobs:
           docker compose --profile test run --rm --build tests
           test "$(docker compose exec -T redis redis-cli GET docker-test-sentinel)" = retained
           docker compose --profile benchmark run --rm --build benchmark
-          docker compose --profile benchmark run --rm --no-deps benchmark python -c "import glob,json; paths=glob.glob('benchmarks/results/quick-*.json'); assert paths; [json.load(open(path)) for path in paths]; print('persisted benchmark JSON: OK')"
+          docker compose --profile benchmark run --rm --no-deps benchmark python -c "import glob,json; paths=glob.glob('benchmarks/results/quick-*.json'); assert paths; reports=[json.load(open(path)) for path in paths]; assert all(r['provenance']['source_sha'] is None and r['provenance']['source_dirty'] is None and 'moderato/limiter.py' in r['provenance']['sha256'] and 'moderato/scripts/token_bucket.lua' in r['provenance']['sha256'] for r in reports); print('persisted benchmark JSON and Git-free installed-package fingerprints: OK')"
           docker compose --profile benchmark run --rm --no-deps benchmark tar -C benchmarks/results -cf - . > "$RUNNER_TEMP/docker-benchmark-results.tar"
 
       - name: Retain benchmark smoke evidence

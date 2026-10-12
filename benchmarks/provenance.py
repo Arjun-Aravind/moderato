@@ -33,10 +33,16 @@ def collect_provenance() -> dict[str, Any]:
         str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted((ROOT / "benchmarks").glob("*.py"))
     }
+    package_root = Path(moderato.__file__).parent
+    package_files = sorted(package_root.rglob("*.py")) + sorted(
+        (package_root / "scripts").glob("*.lua")
+    )
     hashes.update(
         {
-            f"moderato/scripts/{path.name}": hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted((Path(moderato.__file__).parent / "scripts").glob("*.lua"))
+            f"moderato/{path.relative_to(package_root)}": hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
+            for path in package_files
         }
     )
     return {

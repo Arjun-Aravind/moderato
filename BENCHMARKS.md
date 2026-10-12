@@ -38,11 +38,11 @@ controls JSON size; the measurements are identical either way.
 ## Current harness contracts (schema 2)
 
 - Both outputs record exact Git HEAD, dirty state, SHA-256 hashes of harness
-  Python and moderato Lua files, and the complete installed distribution
+  Python and imported moderato Python/Lua files, and the complete installed distribution
   manifest. A dirty run is explicitly not evidence of the clean HEAD alone.
   Without Git checkout metadata (including the installed-wheel Docker
   benchmark), revision and dirty state are explicitly null/unknown; Lua
-  hashes come from the actual imported package, not an assumed source copy.
+  and Python hashes come from the actual imported package, not an assumed source copy.
   Older JSON has no retroactively invented provenance.
 - Performance ownership is now `bench-performance-<run-id>~:` in the Redis
   key prefix, separate from the identity component. All accepted run IDs
@@ -114,6 +114,9 @@ Git-free behavior is checked separately by the provenance regressions and
 installed-wheel Docker benchmark in CI, not demonstrated by these JSONs.
 These retain their own source hashes and environment manifest; they are
 additional harness smoke evidence, not matched production measurements.
+The retained S4 JSON predates the installed-Python fingerprint follow-up;
+its hashes are preserved as recorded. New outputs additionally fingerprint
+the imported package's Python implementation, including Git-free wheel runs.
 
 ## Environment
 

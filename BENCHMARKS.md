@@ -1,10 +1,11 @@
 # Benchmarks
 
-Everything in this file comes from actual runs executed on the committed
-harness. The raw, machine-readable results for each published run are
-committed next to it under [`benchmarks/results/`](benchmarks/results/) —
-every number below can be traced to a JSON file named in its caption. No
-number on this page is a marketing target.
+The tables below are historical measurements of moderato 0.3.0 and the
+named competitor versions, not measurements of the current release. Their
+original JSON under [`benchmarks/results/`](benchmarks/results/) is preserved
+unchanged. The current harness has correctness and provenance improvements
+described below; rerunning it does not reproduce the old harness byte for
+byte. No number on this page is a marketing target or production certification.
 
 Committed JSON is written with `--slim`: it keeps every summary and drops
 the per-sample arrays (4,000 per-key memory samples per algorithm and the
@@ -18,10 +19,15 @@ per-client sweep percentiles), which would otherwise make each file about
 ## How to reproduce
 
 ```bash
-# Requires Redis on localhost:6379 (or REDIS_URL)
+# In another terminal, start a dedicated disposable Redis (never a shared DB):
+# docker run --rm --name moderato-benchmark -p 127.0.0.1:6398:6379 redis:7.0.15
+export REDIS_URL=redis://127.0.0.1:6398
 poetry install
-poetry run python benchmarks/performance.py --slim     # ~60 s, commit-sized JSON
-poetry run python benchmarks/compare_libraries.py      # ~65 s, bootstraps its own venv
+poetry run python benchmarks/performance.py --slim
+poetry run python benchmarks/compare_libraries.py --http-control
+# Counterbalance library order in an independent second run:
+poetry run python benchmarks/compare_libraries.py --reverse-order --http-control
+# Stop the disposable container when finished: docker stop moderato-benchmark
 ```
 
 Each run writes `benchmarks/results/<kind>-<run-id>.json`. Re-running with
@@ -29,9 +35,82 @@ the same `--run-id` replays the same deterministic Redis key layout; the
 harness sweeps its own keys before and after every run. `--slim` only
 controls JSON size; the measurements are identical either way.
 
+## Current harness contracts (schema 2)
+
+- Both outputs record exact Git HEAD, dirty state, SHA-256 hashes of harness
+  Python and moderato Lua files, and the complete installed distribution
+  manifest. A dirty run is explicitly not evidence of the clean HEAD alone.
+  Without Git checkout metadata (including the installed-wheel Docker
+  benchmark), revision and dirty state are explicitly null/unknown; Lua
+  hashes come from the actual imported package, not an assumed source copy.
+  Older JSON has no retroactively invented provenance.
+- Performance ownership is now `bench-performance-<run-id>~:` in the Redis
+  key prefix, separate from the identity component. All accepted run IDs
+  (1–64 safe characters) remain cleanable even when an identity hashes.
+  Memory depends on key length: new memory values need not match old tables.
+  Cleanup does not recover old hashed orphan keys, which cannot be attributed
+  safely by prefix. Dispose of the dedicated Redis rather than sweeping
+  unrelated keys. Do not run two harnesses concurrently with the same run ID.
+- Connect/first checks and comparison first requests are recorded separately.
+  These are process-first-use timings, not guaranteed cold Redis script-cache
+  timings: the harness does not flush server scripts.
+  Main performance timing uses warmed runtime/scripts and fresh identities
+  in each trial, rather than mixing first-use and populated keys. Sequential
+  and concurrent throughput order alternates. Comparison warmup consumes 20
+  requests and is erased before each level; quota is retained between trials
+  within a level. Library order reverses between scenarios, and
+  `--reverse-order` counterbalances a second run, not each individual trial.
+- Comparison levels must return exactly the expected 200/429 distribution:
+  all 200 for allowed/plain runs; a total of 100 allowed per limited level,
+  not per trial. Unexpected 503s, redirects, extra rejects or extra allows
+  fail the run. Status mismatch JSON retains observed/expected counts and
+  partial evidence under `failure`; it is not a successful performance run.
+- The quick tenant mix is 14/5/1 (free/premium/enterprise), matching the full
+  profile's 70/25/5 proportions. Both profiles disclose actual tier counts.
+- Native `limits-async` uses limits 5.8.0's `RedisStorage` with
+  `implementation="redispy"` and `FixedWindowRateLimiter.hit()`, keyed by IP
+  and route. This minimal FastAPI adapter is a separate baseline, not a
+  claim that slowapi uses that async backend.
+- The comparison explicitly pins limits 5.8.0 and Starlette 1.7.0 as well
+  as its existing pins. `--http-control` additionally installs only pinned
+  uvicorn 0.24.0.post1 and its dependencies into the comparison venv. It
+  measures 200 allowed requests at 10 clients, one trial per app over real
+  loopback TCP, with 5 s startup/teardown and 30 s measurement timeouts.
+  Client/server still share one process/event loop: no remote load generator,
+  TLS, multi-worker server or deployment claim. Every timed ASGI/TCP level
+  also records a 5 ms heartbeat's p99/max scheduling delay and sample count;
+  zero samples means the trial was too short, not proven absence of delay.
+- Accuracy remains one burst per algorithm per run, and pool capacity one
+  probe per level. These are checks, not repeated-trial estimates. Raising
+  the benchmark pool is not a recommendation for every deployment.
+
+Benchmark regressions run with `python -m pytest benchmarks/test_harness.py`.
+They start disposable Redis themselves without FLUSHDB; the native async
+case requires the comparison dependencies (and skips when absent).
+
+### Follow-up validation, not new rankings
+
+The schema-2 evidence [`s4-quick.json`](benchmarks/results/s4-quick.json),
+[`s4-compare.json`](benchmarks/results/s4-compare.json), and
+[`s4-compare-reverse.json`](benchmarks/results/s4-compare-reverse.json)
+records fresh checks on the dirty source tree based on the source SHA
+in each file. The quick run uses a 64-character ID to exercise cleanup.
+The comparisons use respectively one trial plus the optional TCP control,
+and two trials with reversed library ordering. These checks validate the
+harness contracts; they do not update any historical performance table,
+establish reliable new rankings, or certify production use. Use the exact
+file hashes/manifest when comparing these runs to later integrated code.
+
+After integration, [`s4-integration-quick.json`](benchmarks/results/s4-integration-quick.json)
+and [`s4-integration-compare.json`](benchmarks/results/s4-integration-compare.json)
+repeat the 64-character-ID quick check and one-trial comparison with TCP
+controls on the integrated dirty tree, including Git-free provenance support.
+These retain their own source hashes and environment manifest; they are
+additional harness smoke evidence, not matched production measurements.
+
 ## Environment
 
-All runs below were executed on the same machine in one session:
+The historical table runs below were executed on the same machine in one session:
 
 | Component | Value |
 | --- | --- |
@@ -50,13 +129,16 @@ share two vCPUs.
 
 ## Methodology
 
-- **Trials and variance.** Every scenario runs multiple trials; each number
-  is reported as mean ± sample standard deviation across trials, with the
-  raw per-trial values in the JSON. The two per-key memory tables are the
-  exception: their ± is the spread across the measured keys, not across
-  trials, and the tables say so.
-- **Deterministic run keys.** All Redis keys derive from the run id
-  (`ratelimit:bench%3A<run-id>%3A…`), swept before and after each run.
+- **Trials and variance.** Throughput, latency, algorithm, concurrency and
+  tenant scenarios run multiple trials in the full profile; summaries
+  include sample standard deviation and raw trial values. Accuracy is a
+  single burst per algorithm, pool capacity a single probe per level, and
+  memory a single batch per algorithm/state. Memory ± is the spread across
+  keys, not trials. Quick profiles and `--trials 1` cannot estimate variance.
+- **Deterministic run keys.** Historical identities included the run ID
+  (`ratelimit:bench%3A<run-id>%3A…`). Those short published IDs were
+  cleanable; accepted longer IDs could hash and evade cleanup. Schema 2
+  moves ownership to the key prefix as described above.
 - **Comparison isolation.** In the head-to-head below each library's
   connections are closed after its scenario pair, and every measured
   trial starts with Redis-clock runway — 10 s for a level's first trial,
@@ -288,32 +370,36 @@ trials per concurrency level.
 | Redis floor | — | 1× and 2× `EVALSHA` per request, no HTTP stack |
 
 The comparison venv pins these exact versions (plus httpx 0.28.1 and
-redis-py 5.3.1); the installed set is recorded in each JSON under
-`versions`. This compares implementations as-shipped, not theoretical
-optima. As-shipped facts worth knowing, each checked against the installed
-packages:
+redis-py 5.3.1, now also explicitly limits 5.8.0 and Starlette 1.7.0).
+Historical JSON records selected versions under `versions`; schema 2 also
+records the full installed manifest. These are version-specific harness
+configurations, not theoretical optima or a comparison of all defaults.
 
-- **slowapi cannot use async Redis as shipped.** Its documented
+- **slowapi 0.1.10 uses synchronous limits strategies.** Its documented
   `redis://` storage URI instantiates limits' *sync* Redis client inside
   the async endpoint (`limits.storage.redis.RedisStorage` wrapping
-  `redis.client.Redis`). limits' async scheme (`async+redis://`) raises a
-  `ConfigurationError` without `coredis`; with `coredis` 6.9.0 installed,
-  `Limiter(...)` still fails inside slowapi's strategy construction
-  (`assert isinstance(storage, Storage)` in `limits/strategies.py`). The
-  sync client is therefore its only working Redis mode, and it is what was
-  benchmarked.
-- **fastapi-limiter's documented usage is in-memory.** Its README's
+  `redis.client.Redis`). Its strategy construction rejects async storage.
+  This is not a limitation of limits 5.8.0: its native async Redis storage
+  supports `implementation="redispy"` as well as the default coredis.
+  The current harness includes that native async baseline separately; it
+  was not measured in the historical tables.
+- **fastapi-limiter 0.2.0's documented basic usage is in-memory.** Its README's
   `Limiter(Rate(...))` never touches Redis; to honor the same-Redis
-  workload it was wired to pyrate-limiter's documented `RedisBucket`.
-  A `RedisBucket` is a single bucket per route, not per client identity:
-  with a limit of 3 per minute, 3 requests from `10.0.0.1` returned
+  workload it was wired to PyrateLimiter 4.5.0's `RedisBucket`.
+  Passing that bucket to `Limiter(bucket)` uses `SingleBucketFactory`, so
+  this harness shares a bucket across identities; other bucket factories
+  can partition identities. This is not an inherent inability to key by
+  client. In this configuration, with a limit of 3 per minute, 3 requests
+  from `10.0.0.1` returned
   200/200/200 and 3 from `10.0.0.2` returned 429/429/429. With the
   single-identity workload used here the behaviour is identical either way,
   but it is not a per-IP limiter as configured. (The harness's
   `methodology.app_shape` metadata describes the app, which keys per IP;
   fastapi-limiter's shared route bucket is the exception disclosed here.)
-- **fastapi-limiter's Redis bucket stores one sorted-set member per
-  request** (pyrate-limiter's README says so), so its memory grows with
+  fastapi-limiter 0.1.6 had a different native async Redis Lua architecture;
+  the 0.2.0 results do not characterize that older version.
+- **The configured PyrateLimiter 4.5.0 Redis bucket stores one sorted-set member per
+  request**, so its memory grows with
   traffic inside the window, unlike moderato's constant-size counters.
   This benchmark measures speed, not its memory.
 - **Redis commands per request** (counted with `INFO commandstats` over 200
@@ -397,10 +483,12 @@ Percent difference in throughput, moderato versus the library, run 1 / run
 
 ### Interpretation
 
-- **The HTTP stack dominates every library.** The plain app runs at
+- **In-process stack overhead is substantial in these runs.** The plain app runs at
   ~3,407–3,933 req/s in-process on this box; all three limiter libraries land
   in the same ~1.1–1.8k band, adding a few tenths of a millisecond per
-  request. None of them is the bottleneck a deployment would feel first.
+  request. This does not establish which component a deployment would
+  bottleneck on: there is no independent network load generator, remote
+  Redis, multi-worker server, or production traffic in these measurements.
 - **Client-bound, not Redis-bound.** In the concurrency sweep the benchmark
   process runs at 99–100% of a core while the Redis server stays at
   28–41% of a core — the direct evidence for client-boundedness. The raw
@@ -441,11 +529,10 @@ Percent difference in throughput, moderato versus the library, run 1 / run
   matters less.
 - The client, the ASGI app and Redis share two vCPUs, so the head-to-head
   numbers include contention that a deployment would not have.
-- Configurations follow each library's documented usage as shipped; none
-  were tuned. The comparison is fair to defaults, not to peak
-  configurability.
+- Configurations are disclosed and version-specific, including a manually
+  selected Redis bucket/factory for fastapi-limiter 0.2.0. They are not a
+  comparison of all defaults or peak configurability.
 - Both published runs are committed; rerunning on different hardware will
-  produce different absolute numbers. The defensible claims are the
-  relationships (client-bound vs Redis-bound, the one-round-trip design
-  all algorithms share, the
-  pool boundary), not the absolute req/s.
+  produce different absolute numbers. Client-bound observations apply to
+  this workload and machine, the pool threshold is timing-dependent, and
+  rankings apply only to these versions/configurations, not deployments.

@@ -39,6 +39,7 @@ import redis.asyncio as redis
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from benchmarks.provenance import collect_provenance  # noqa: E402
 from moderato import RateLimiter, RateLimitExceeded  # noqa: E402
 from moderato.utils import normalize_key_component  # noqa: E402
 
@@ -196,6 +197,7 @@ class PerformanceBenchmark:
         self.profile = profile
         self.config = config
         self.run_id = run_id
+        self.key_prefix = f"bench-performance-{run_id}~"
         self.results: dict[str, Any] = {}
         self.limiter: Optional[RateLimiter] = None
         self.probe: Optional[redis.Redis] = None
@@ -207,7 +209,7 @@ class PerformanceBenchmark:
 
     def bench_key(self, *parts: Any) -> str:
         """Deterministic limiter key for this run (prefixed by the limiter)."""
-        return ":".join(["bench", self.run_id, *[str(p) for p in parts]])
+        return ":".join(["bench", *[str(p) for p in parts]])
 
     def redis_key_pattern(self, *parts: Any) -> str:
         """SCAN pattern for this run's keys.
@@ -216,8 +218,12 @@ class PerformanceBenchmark:
         pattern must be built through the library's own encoder, including
         the trailing separator.
         """
-        prefix = self.limiter.config.key_prefix if self.limiter else "ratelimit"
-        component = ":".join(["bench", self.run_id, *[str(p) for p in parts]]) + ":"
+        # Ownership is independent of identity encoding/hashing. The terminal
+        # ~ cannot occur in accepted run IDs, preventing prefix collisions.
+        if not parts:
+            return f"{self.key_prefix}:*"
+        prefix = self.key_prefix
+        component = self.bench_key(*parts) + ":"
         return f"{prefix}:{normalize_key_component(component)}*"
 
     async def _start_of_next_second(self, margin: float = 0.002) -> None:
@@ -255,9 +261,11 @@ class PerformanceBenchmark:
         # clip the high-concurrency levels. Raise it through the public
         # RateLimitConfig field so scaling sections measure the limiter, and
         # measure the default-pool boundary separately (pool_capacity probe).
-        self.limiter = RateLimiter(redis_url=self.redis_url)
+        self.limiter = RateLimiter(redis_url=self.redis_url, key_prefix=self.key_prefix)
         self.limiter.config.max_connections = self.pool_size
+        start = time.perf_counter()
         await self.limiter.connect()
+        self.results["cold_connect_ms"] = round((time.perf_counter() - start) * 1000, 4)
         self.probe = redis.from_url(self.redis_url, decode_responses=True)
         await self.probe.ping()
         swept = await self._delete_bench_keys()
@@ -295,20 +303,27 @@ class PerformanceBenchmark:
         assert self.limiter is not None
 
         for trial in range(trials):
-            start = time.perf_counter()
-            for i in range(requests):
-                await self.limiter.check(key=self.bench_key("throughput", "seq", i), rate=HIGH_RATE)
-            seq_time = time.perf_counter() - start
-            seq_rates.append(requests / seq_time)
-
-            start = time.perf_counter()
-            tasks = [
-                self.limiter.check(key=self.bench_key("throughput", "con", i), rate=HIGH_RATE)
-                for i in range(requests)
-            ]
-            await asyncio.gather(*tasks)
-            con_time = time.perf_counter() - start
-            con_rates.append(requests / con_time)
+            # Alternate path order; each trial uses fresh identities, not an
+            # accidental mixture of first-use and previously populated keys.
+            paths = ["seq", "con"] if trial % 2 == 0 else ["con", "seq"]
+            for path in paths:
+                start = time.perf_counter()
+                if path == "seq":
+                    for i in range(requests):
+                        await self.limiter.check(
+                            key=self.bench_key("throughput", trial, path, i), rate=HIGH_RATE
+                        )
+                    seq_rates.append(requests / (time.perf_counter() - start))
+                else:
+                    await asyncio.gather(
+                        *[
+                            self.limiter.check(
+                                key=self.bench_key("throughput", trial, path, i), rate=HIGH_RATE
+                            )
+                            for i in range(requests)
+                        ]
+                    )
+                    con_rates.append(requests / (time.perf_counter() - start))
 
             print(
                 f"  trial {trial + 1}/{trials}: sequential {seq_rates[-1]:8.1f} req/s | "
@@ -340,11 +355,11 @@ class PerformanceBenchmark:
         assert self.limiter is not None
 
         trials_latencies: list[list[float]] = []
-        for _ in range(trials):
+        for trial in range(trials):
             latencies: list[float] = []
             for i in range(samples):
                 start = time.perf_counter()
-                await self.limiter.check(key=self.bench_key("latency", i), rate=HIGH_RATE)
+                await self.limiter.check(key=self.bench_key("latency", trial, i), rate=HIGH_RATE)
                 latencies.append((time.perf_counter() - start) * 1000.0)
             trials_latencies.append(latencies)
 
@@ -379,12 +394,14 @@ class PerformanceBenchmark:
             rates: list[float] = []
             trials_latencies: list[list[float]] = []
 
-            async def client_work(client_id: int, trial: int) -> list[float]:
+            async def client_work(
+                client_id: int, trial: int, level: int = num_clients
+            ) -> list[float]:
                 latencies = []
                 for i in range(per_client):
                     start = time.perf_counter()
                     await self.limiter.check(
-                        key=self.bench_key("sweep", trial, client_id, i), rate=HIGH_RATE
+                        key=self.bench_key("sweep", level, trial, client_id, i), rate=HIGH_RATE
                     )
                     latencies.append((time.perf_counter() - start) * 1000.0)
                 return latencies
@@ -442,12 +459,12 @@ class PerformanceBenchmark:
         results = {}
         for algorithm in algorithms:
             trials_latencies: list[list[float]] = []
-            for _ in range(trials):
+            for trial in range(trials):
                 latencies: list[float] = []
                 for i in range(samples):
                     start = time.perf_counter()
                     await self.limiter.check(
-                        key=self.bench_key("algorithm", algorithm, i),
+                        key=self.bench_key("algorithm", algorithm, trial, i),
                         rate=HIGH_RATE,
                         algorithm=algorithm,
                     )
@@ -687,7 +704,7 @@ class PerformanceBenchmark:
 
         from moderato import BackendError
 
-        probe_limiter = RateLimiter(redis_url=self.redis_url)
+        probe_limiter = RateLimiter(redis_url=self.redis_url, key_prefix=self.key_prefix)
         await probe_limiter.connect()
         # Instrument the backend's redis-py pool to observe peak usage; the
         # wrappers delegate to the originals and are not restored because the
@@ -771,7 +788,11 @@ class PerformanceBenchmark:
         assert self.limiter is not None
 
         # Tier distribution: 70% free, 25% premium, 5% enterprise.
-        tiers = ["free"] * 70 + ["premium"] * 25 + ["enterprise"] * 5
+        free = round(tenants * 0.70)
+        premium = round(tenants * 0.25)
+        tiers = (
+            ["free"] * free + ["premium"] * premium + ["enterprise"] * (tenants - free - premium)
+        )
         rates: list[float] = []
 
         async def tenant_requests(tenant_id: int, trial: int, tier: str) -> None:
@@ -796,6 +817,7 @@ class PerformanceBenchmark:
 
         self.results["multi_tenant"] = {
             "tenants": tenants,
+            "tier_counts": {tier: tiers.count(tier) for tier in set(tiers)},
             "requests_per_trial": tenants * per_tenant,
             "throughput_req_s": summarize(rates),
         }
@@ -827,6 +849,17 @@ class PerformanceBenchmark:
         try:
             assert self.probe is not None
             self.redis_info = dict(await self.probe.info("server"))
+            # Record first use separately, then warm every algorithm before
+            # timing throughput/latency over fresh quota identities.
+            self.results["cold_first_check_ms"] = {}
+            for algorithm in ("fixed_window", "token_bucket", "sliding_window"):
+                start = time.perf_counter()
+                await self.limiter.check(
+                    key=self.bench_key("warmup", algorithm), rate=HIGH_RATE, algorithm=algorithm
+                )
+                self.results["cold_first_check_ms"][algorithm] = round(
+                    (time.perf_counter() - start) * 1000, 4
+                )
             await self.benchmark_throughput()
             await self.benchmark_latency()
             await self.benchmark_algorithm_comparison()
@@ -841,7 +874,8 @@ class PerformanceBenchmark:
     def to_json(self, started_at: datetime) -> dict[str, Any]:
         ended_at = datetime.now(timezone.utc)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
+            "provenance": collect_provenance(),
             "benchmark": "moderato-performance",
             "profile": self.profile,
             "run_id": self.run_id,
@@ -852,6 +886,11 @@ class PerformanceBenchmark:
             "environment": self.collect_environment(),
             "configuration": {
                 **dict(self.config),
+                "state_note": (
+                    "connect/first checks recorded separately; measured throughput, latency, "
+                    "algorithm and sweep trials use fresh identities with warmed runtime; "
+                    "accuracy is one burst per algorithm and pool is one probe per level"
+                ),
                 "connection_pool_size": self.pool_size,
                 "connection_pool_note": (
                     "raised from the default 50 via RateLimitConfig.max_connections so "
@@ -950,9 +989,11 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    if args.trials is not None and args.trials < 1:
+        parser.error("--trials must be positive")
     resolved_run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    # The run id becomes part of Redis key components; moderato hashes
-    # components over 100 chars, which would break the run's SCAN cleanup.
+    # Run ownership lives in the key prefix, independent of identity hashing.
+    # Reject glob metacharacters so SCAN cannot widen beyond this run.
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", resolved_run_id):
         parser.error("--run-id must match [A-Za-z0-9._-]{1,64}")
     output = args.json or Path("benchmarks/results") / (

@@ -234,6 +234,11 @@ class TestPasswordRedaction:
             "redis://localhost:6379?db=1&pass%77ord=mysecretpassword&socket_timeout=2",
             "redis://localhost:6379?%70%77%64=mysecretpassword",
             "redis://localhost:6379?password=mysecretpassword&pass%77ord=mysecretpassword",
+            "redis://localhost:6379/&x=?password=mysecretpassword&db=0",
+            "redis://localhost:6379/&x=?pass%77ord=mysecretpassword&db=0",
+            "redis://localhost:6379?pass\tword=mysecretpassword",
+            "redis://localhost:6379?pass\nword=mysecretpassword",
+            "redis://localhost:6379?pass\rword=mysecretpassword",
         ],
     )
     def test_password_not_in_init_log(self, caplog, redis_url):

@@ -10,10 +10,14 @@ from moderato import RateLimitCallbackError, RateLimitExceeded
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shared_scope", [False, True])
 @pytest.mark.parametrize("dynamic_mount", [False, True])
-async def test_mounted_routes_isolate_default_scopes(frozen_limiter, shared_scope, dynamic_mount):
+@pytest.mark.parametrize("root_path", ["", "/proxy", "/proxy/"])
+async def test_mounted_routes_isolate_default_scopes(
+    frozen_limiter, shared_scope, dynamic_mount, root_path
+):
     import httpx
     from fastapi import FastAPI, Request
     from fastapi.responses import JSONResponse
+    from starlette import routing
 
     app = FastAPI()
     first = FastAPI()
@@ -36,16 +40,18 @@ async def test_mounted_routes_isolate_default_scopes(frozen_limiter, shared_scop
     nested.mount("/second", second)
     app.mount("/nested", nested)
 
+    # Newer Starlette retains the proxy-prefixed path; older mounts shorten it.
+    proxy_prefix = root_path if hasattr(routing, "get_route_path") else ""
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app, root_path=root_path), base_url="http://test"
     ) as client:
-        prefix = "/orgs/a" if dynamic_mount else "/first"
+        prefix = proxy_prefix + ("/orgs/a" if dynamic_mount else "/first")
         assert (await client.get(f"{prefix}/items/one")).status_code == 200
         # Parameter values must not create fresh quotas for the same route.
         assert (await client.get(f"{prefix}/items/two")).status_code == 429
         if dynamic_mount:
-            assert (await client.get("/orgs/b/items/one")).status_code == 429
-        other = await client.get("/nested/second/items/one")
+            assert (await client.get(f"{proxy_prefix}/orgs/b/items/one")).status_code == 429
+        other = await client.get(f"{proxy_prefix}/nested/second/items/one")
         assert other.status_code == (429 if shared_scope else 200)
 
 

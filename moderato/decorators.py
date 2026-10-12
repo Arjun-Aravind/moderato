@@ -281,7 +281,7 @@ async def _check_rate_limit(
 def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
     request_scope = getattr(request, "scope", {})
     method = getattr(request, "method", None) or request_scope.get("method", "*")
-    root_path = request_scope.get("app_root_path", request_scope.get("root_path", "")).rstrip("/")
+    root_path = request_scope.get("app_root_path", request_scope.get("root_path", ""))
     routes = getattr(request_scope.get("router"), "routes", [])
     if routes:
         from starlette import routing
@@ -293,7 +293,8 @@ def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
             # Older Starlette mounts shorten path; newer versions retain it.
             mount_path = request_scope.get("root_path", "")[len(root_path) :]
             matching_scope["path"] = mount_path + request_scope["path"]
-        template = root_path
+        # Normalize only the quota name, not the routing coordinate system.
+        template = root_path.rstrip("/")
         while routes:
             for candidate in routes:
                 match, child_scope = candidate.matches(matching_scope)
@@ -307,6 +308,7 @@ def _get_default_scope(request: Any, func: Callable[..., Any]) -> str:
                     break
             else:
                 break
+    root_path = root_path.rstrip("/")
     route = request_scope.get("route")
     route_path = getattr(route, "path", None)
     if route_path:

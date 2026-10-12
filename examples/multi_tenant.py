@@ -251,21 +251,13 @@ async def check_usage(x_api_key: str = Header(None)):
         else:
             tenant_type = tier
 
-        try:
-            usage = await limiter.get_usage(key=tenant_id, rate=limit, tenant_type=tenant_type)
-            usage_data[endpoint] = {
-                "current": usage["current"],
-                "limit": usage["limit"],
-                "remaining": usage["remaining"],
-                "resets_in": usage["ttl"],
-            }
-        except Exception:
-            usage_data[endpoint] = {
-                "current": 0,
-                "limit": int(limit.split("/")[0]),
-                "remaining": int(limit.split("/")[0]),
-                "resets_in": 0,
-            }
+        usage = await limiter.get_usage(key=tenant_id, rate=limit, tenant_type=tenant_type)
+        usage_data[endpoint] = {
+            "current": usage["current"],
+            "limit": usage["limit"],
+            "remaining": usage["remaining"],
+            "resets_in": usage["ttl"],
+        }
 
     return {
         "tenant": tenant_name,

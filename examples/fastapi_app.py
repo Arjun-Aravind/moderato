@@ -239,26 +239,16 @@ async def status_endpoint():
 @app.get("/api/usage/{user_id}")
 async def usage_endpoint(user_id: str):
     """Check rate limit usage for a specific user."""
-    try:
-        usage = await limiter.get_usage(key=f"user:{user_id}", rate="100/hour", scope="user-api")
+    usage = await limiter.get_usage(key=f"user:{user_id}", rate="100/hour", scope="user-api")
 
-        return {
-            "user_id": user_id,
-            "current_requests": usage["current"],
-            "limit": usage["limit"],
-            "remaining": usage["remaining"],
-            "resets_in": usage["ttl"],
-            "window_seconds": usage["window_seconds"],
-        }
-    except Exception as e:
-        return {
-            "user_id": user_id,
-            "current_requests": 0,
-            "limit": 100,
-            "remaining": 100,
-            "resets_in": 0,
-            "error": str(e),
-        }
+    return {
+        "user_id": user_id,
+        "current_requests": usage["current"],
+        "limit": usage["limit"],
+        "remaining": usage["remaining"],
+        "resets_in": usage["ttl"],
+        "window_seconds": usage["window_seconds"],
+    }
 
 
 @app.post("/api/reset/{user_id}")

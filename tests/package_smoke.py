@@ -1,6 +1,7 @@
 """Verify built distributions on Python 3.12, not the source checkout."""
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -74,6 +75,45 @@ async def installed(version, extras):
     assert await limiter.health_check()
     await limiter.close()
 
+    # Raw ASGI must handle outages even in a base-only installation.
+    from moderato.decorators import RateLimitMiddleware
+
+    for downstream in (False, True):
+        outage_limiter = moderato.RateLimiter(
+            redis_url=os.environ["REDIS_URL"] if downstream else "redis://127.0.0.1:1",
+            key_prefix=f"package-outage-{uuid4().hex}",
+        )
+        called = False
+        messages = []
+
+        async def app(scope, receive, send):
+            nonlocal called
+            called = True
+            raise moderato.BackendError("downstream unavailable")
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+
+        async def send(message, messages=messages):
+            messages.append(message)
+
+        try:
+            await RateLimitMiddleware(app, outage_limiter)(
+                {"type": "http", "path": "/", "headers": [], "client": ("127.0.0.1", 1)},
+                receive,
+                send,
+            )
+            assert called == downstream
+            assert [m["status"] for m in messages if m["type"] == "http.response.start"] == [503]
+            assert json.loads(messages[-1]["body"]) == {"error": "Rate limit backend unavailable"}
+            headers = dict(messages[0]["headers"])
+            assert b"retry-after" not in headers
+            assert not any(name.startswith(b"x-ratelimit-") for name in headers)
+        finally:
+            if downstream:
+                await outage_limiter.reset("ip:127.0.0.1")
+            await outage_limiter.close()
+
 
 def verify():
     root = Path(__file__).resolve().parents[1]
@@ -109,7 +149,10 @@ def verify():
                 venv.create(env, with_pip=True, symlinks=True)
                 python = str(env / "bin/python")
                 requirement = f"moderato{'[all]' if extras else ''} @ {artifact.as_uri()}"
-                subprocess.run([python, "-m", "pip", "install", requirement], check=True)
+                # Rebuilt unreleased sdists must not reuse an older cached wheel.
+                subprocess.run(
+                    [python, "-m", "pip", "install", "--no-cache-dir", requirement], check=True
+                )
                 subprocess.run([python, "-m", "pip", "check"], check=True)
                 subprocess.run(
                     [python, "-I", str(Path(__file__).resolve()), version, str(int(extras))],

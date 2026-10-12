@@ -51,6 +51,11 @@ controls JSON size; the measurements are identical either way.
   Cleanup does not recover old hashed orphan keys, which cannot be attributed
   safely by prefix. Dispose of the dedicated Redis rather than sweeping
   unrelated keys. Do not run two harnesses concurrently with the same run ID.
+- Comparison cleanup matches only its reserved storage namespaces: the
+  Moderato/native async limits key prefix, slowapi's logical LIMITER prefix,
+  and pyrate's exact bucket key. A run marker embedded in another application's
+  identity does not grant ownership; those values and expiry deadlines remain
+  untouched. Prefer dedicated Redis even with namespace-isolated cleanup.
 - Connect/first checks and comparison first requests are recorded separately.
   These are process-first-use timings, not guaranteed cold Redis script-cache
   timings: the harness does not flush server scripts.

@@ -90,6 +90,37 @@ async def test_long_run_cleanup_preserves_other_runs(disposable_redis):
         await client.aclose()
 
 
+async def test_comparison_cleanup_preserves_marker_in_unrelated_keys(disposable_redis):
+    from benchmarks.compare_libraries import delete_owned_keys
+    from moderato import RateLimiter
+
+    prefix = "bench-compare-cleanup-contract~"
+    client = redis.from_url(disposable_redis, decode_responses=True)
+    limiter = RateLimiter(redis_url=disposable_redis)
+    await limiter.connect()
+    try:
+        await limiter.check(key=prefix, rate="10/day")
+        foreign = [key async for key in client.scan_iter()]
+        foreign += [f"LIMITS:LIMITER/application/{prefix}/10/1/minute", f"{prefix}-pyrate-extra"]
+        await client.mset({key: "unrelated" for key in foreign[1:]})
+        before = {key: (await client.dump(key), await client.pexpiretime(key)) for key in foreign}
+        owned = [
+            f"{prefix}:moderato:quota",
+            f"{prefix}:LIMITER/client/10/1/minute",
+            f"LIMITS:LIMITER/{prefix}-/client/10/1/minute",
+            f"{prefix}-pyrate",
+        ]
+        await client.mset({key: "owned" for key in owned})
+        assert await delete_owned_keys(client, prefix) == len(owned)
+        assert sorted([key async for key in client.scan_iter()]) == sorted(foreign)
+        assert {
+            key: (await client.dump(key), await client.pexpiretime(key)) for key in foreign
+        } == before
+    finally:
+        await limiter.close()
+        await client.aclose()
+
+
 @pytest.mark.parametrize("status", [503, 429, 302])
 async def test_rejects_unexpected_timed_status_after_successful_warmup(status):
     calls = 0

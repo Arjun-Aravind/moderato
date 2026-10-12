@@ -282,20 +282,25 @@ APP_BUILDERS: dict[str, AppBuilder] = {
 
 
 async def delete_owned_keys(redis_client: Any, key_prefix: str) -> int:
-    """Delete every key this run owns, identified by its unique prefix.
+    """Delete only the storage namespaces reserved by this run's builders.
 
-    Never touches anything else on the (possibly shared) database. The
-    prefix ends in ``~``, which run ids cannot contain, so a run id that is
-    a prefix of another (``c1`` and ``c1-b``) can never match the other's
-    keys.
+    Moderato and native async limits start their keys with this prefix;
+    slowapi places it at the start of the logical LIMITER namespace, and
+    pyrate uses one exact bucket key. A marker inside another application's
+    identity is not ownership. The ``~`` terminator separates similar run ids.
     """
     deleted = 0
     batch: list[str] = []
-    async for key in redis_client.scan_iter(match=f"*{key_prefix}*", count=500):
-        batch.append(key)
-        if len(batch) >= 500:
-            deleted += await redis_client.delete(*batch)
-            batch = []
+    for pattern in (
+        f"{key_prefix}:*",
+        f"LIMITS:LIMITER/{key_prefix}-/*",
+        f"{key_prefix}-pyrate",
+    ):
+        async for key in redis_client.scan_iter(match=pattern, count=500):
+            batch.append(key)
+            if len(batch) >= 500:
+                deleted += await redis_client.delete(*batch)
+                batch = []
     if batch:
         deleted += await redis_client.delete(*batch)
     return deleted

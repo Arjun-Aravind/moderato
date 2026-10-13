@@ -1,24 +1,24 @@
 """
 Head-to-head throughput benchmark: moderato vs slowapi vs fastapi-limiter.
 
-All three libraries drive the same minimal FastAPI app shape (one GET route
+The libraries drive the same minimal FastAPI app shape (one GET route
 returning a small JSON body, per-IP keying) through the same in-process httpx
-client against the same local Redis. Each library is configured per its own
-documented usage, so this compares implementations as-shipped, not
-theoretical optima:
+client against the same dedicated Redis. Configurations are version-specific
+and disclosed, not a comparison of all defaults or theoretical optima:
 
 - moderato: ``RateLimiter.limit()`` decorator (async redis client + Lua) with
   the documented ``RateLimitExceeded`` exception handler for 429s.
 - slowapi: ``Limiter`` decorator with ``storage_uri="redis://..."``. With
-  limits 5.x this instantiates a SYNC redis client inside the async
-  endpoint; slowapi has no working async Redis storage (the
-  ``async+redis://`` scheme requires coredis and then fails slowapi's own
-  strategy assertion), so sync-in-async is its only Redis mode.
+  limits 5.8.0 this instantiates a SYNC redis client inside the async
+  endpoint. This is a slowapi 0.1.10 integration constraint, not a limits
+  constraint: the native limits async baseline uses redispy.
 - fastapi-limiter: ``RateLimiter`` dependency over a pyrate-limiter
   ``RedisBucket``. Its README's ``Limiter(Rate(...))`` is in-memory only; the
-  Redis bucket is pyrate-limiter's documented backend, and it uses ONE shared
-  bucket per route rather than one per identity. With a single client
-  identity the workload is identical either way.
+  harness's SingleBucketFactory uses ONE shared bucket per route rather
+  than one per identity. This is a harness choice, not a claim about all
+  factories or fastapi-limiter versions (0.1.6 used native async Redis Lua).
+- limits-async: native limits 5.8.0 fixed-window strategy with redispy,
+  through a minimal FastAPI route adapter, independently keyed by IP/route.
 
 A raw Redis floor (one EVALSHA round trip, and a TIME + EVALSHA pair, per
 request) is measured
@@ -41,6 +41,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import statistics
 import subprocess
 import sys
@@ -54,6 +55,8 @@ from urllib.parse import urlparse
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from benchmarks.provenance import collect_provenance  # noqa: E402
+
 # Pin the versions the comparison runs against; the results JSON records what
 # was actually installed so the report can state them verbatim.
 PINNED_PACKAGES = [
@@ -65,6 +68,8 @@ PINNED_PACKAGES = [
     "slowapi==0.1.10",
     "fastapi-limiter==0.2.0",
     "pyrate-limiter==4.5.0",
+    "limits==5.8.0",
+    "starlette==1.7.0",
 ]
 
 LEVELS = [1, 10, 50, 100]
@@ -73,6 +78,7 @@ TRIALS = 3
 LIMITED_PER_MINUTE = 100
 
 DEFAULT_VENV = REPO_ROOT / "benchmarks" / ".venv-compare"
+HTTP_PACKAGES = ["uvicorn==0.24.0.post1"]
 
 AppBuilder = Callable[[str, int, str], Any]
 StateReset = Callable[[], Awaitable[None]]
@@ -82,9 +88,10 @@ def venv_python_path(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
-def venv_matches_pins(venv_python: Path) -> bool:
+def venv_matches_pins(venv_python: Path, http_control: bool = False) -> bool:
     """True when the venv has every pinned package at exactly the pinned version."""
-    pins = {p.split("==")[0]: p.split("==")[1] for p in PINNED_PACKAGES}
+    packages = PINNED_PACKAGES + (HTTP_PACKAGES if http_control else [])
+    pins = {p.split("==")[0]: p.split("==")[1] for p in packages}
     script = (
         "import json, importlib.metadata as m; "
         f"pins = {pins!r}; "
@@ -100,7 +107,7 @@ def venv_matches_pins(venv_python: Path) -> bool:
     return installed == pins
 
 
-def ensure_venv(venv_dir: Path) -> Path:
+def ensure_venv(venv_dir: Path, http_control: bool = False) -> Path:
     """Return a python interpreter inside an isolated venv with competitors.
 
     Creates the venv on first use (uv if available, otherwise venv+pip) and
@@ -109,24 +116,27 @@ def ensure_venv(venv_dir: Path) -> Path:
     competitors into the main environment.
     """
     venv_python = venv_python_path(venv_dir)
-    if venv_python.exists() and venv_matches_pins(venv_python):
+    if venv_python.exists() and venv_matches_pins(venv_python, http_control):
         return venv_python
 
     print(f"Bootstrapping isolated comparison venv at {venv_dir} ...")
     if shutil.which("uv"):
-        subprocess.run(
-            ["uv", "venv", str(venv_dir), "--python", platform.python_version()],
-            check=True,
-        )
+        if not venv_python.exists():
+            subprocess.run(
+                ["uv", "venv", str(venv_dir), "--python", platform.python_version()],
+                check=True,
+            )
         installer: list[str] = ["uv", "pip", "install", "--python", str(venv_python)]
     else:
         import venv as venv_module
 
-        venv_module.create(str(venv_dir), with_pip=True)
+        if not venv_python.exists():
+            venv_module.create(str(venv_dir), with_pip=True)
         installer = [str(venv_python), "-m", "pip", "install"]
 
-    subprocess.run([*installer, *PINNED_PACKAGES], check=True)
-    if not venv_matches_pins(venv_python):
+    packages = PINNED_PACKAGES + (HTTP_PACKAGES if http_control else [])
+    subprocess.run([*installer, *packages], check=True)
+    if not venv_matches_pins(venv_python, http_control):
         raise RuntimeError("comparison venv does not match the pinned package set")
     return venv_python
 
@@ -230,6 +240,29 @@ async def build_plain_app(redis_url: str, limit_per_minute: int, key_prefix: str
     return app
 
 
+async def build_limits_async_app(redis_url: str, limit_per_minute: int, key_prefix: str):
+    """Native limits 5.8.0 async Redis, outside slowapi's sync integration."""
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    from limits import parse
+    from limits.aio.storage import RedisStorage
+    from limits.aio.strategies import FixedWindowRateLimiter
+
+    storage = RedisStorage(f"async+{redis_url}", implementation="redispy", key_prefix=key_prefix)
+    limiter = FixedWindowRateLimiter(storage)
+    rate = parse(f"{limit_per_minute}/minute")
+    app = FastAPI()
+
+    @app.get("/")
+    async def index(request: Request):
+        if not await limiter.hit(rate, request.client.host, "/"):
+            return JSONResponse(status_code=429, content={"error": "Rate limit exceeded"})
+        return {"msg": "ok"}
+
+    app.state.close_limiter = storage.bridge.get_connection().aclose
+    return app
+
+
 def _pyrate_limiter(bucket: Any) -> Any:
     from pyrate_limiter import Limiter
 
@@ -241,6 +274,7 @@ APP_BUILDERS: dict[str, AppBuilder] = {
     "moderato": build_moderato_app,
     "slowapi": build_slowapi_app,
     "fastapi-limiter": build_fastapi_limiter_app,
+    "limits-async": build_limits_async_app,
 }
 
 
@@ -248,23 +282,38 @@ APP_BUILDERS: dict[str, AppBuilder] = {
 
 
 async def delete_owned_keys(redis_client: Any, key_prefix: str) -> int:
-    """Delete every key this run owns, identified by its unique prefix.
+    """Delete only the storage namespaces reserved by this run's builders.
 
-    Never touches anything else on the (possibly shared) database. The
-    prefix ends in ``~``, which run ids cannot contain, so a run id that is
-    a prefix of another (``c1`` and ``c1-b``) can never match the other's
-    keys.
+    Moderato and native async limits start their keys with this prefix;
+    slowapi places it at the start of the logical LIMITER namespace, and
+    pyrate uses one exact bucket key. A marker inside another application's
+    identity is not ownership. The ``~`` terminator separates similar run ids.
     """
     deleted = 0
     batch: list[str] = []
-    async for key in redis_client.scan_iter(match=f"*{key_prefix}*", count=500):
-        batch.append(key)
-        if len(batch) >= 500:
-            deleted += await redis_client.delete(*batch)
-            batch = []
+    for pattern in (
+        f"{key_prefix}:*",
+        f"LIMITS:LIMITER/{key_prefix}-/*",
+        f"{key_prefix}-pyrate",
+    ):
+        async for key in redis_client.scan_iter(match=pattern, count=500):
+            batch.append(key)
+            if len(batch) >= 500:
+                deleted += await redis_client.delete(*batch)
+                batch = []
     if batch:
         deleted += await redis_client.delete(*batch)
     return deleted
+
+
+class StatusDistributionError(RuntimeError):
+    """Invalid timed results, retaining the observed counts for diagnostics."""
+
+    def __init__(self, clients: int, observed: dict[int, int], expected: dict[int, int]):
+        self.clients = clients
+        self.status_counts = dict(observed)
+        self.expected_status_counts = expected
+        super().__init__(f"{clients} clients: timed statuses {observed}, expected {expected}")
 
 
 async def measure_app(
@@ -275,6 +324,8 @@ async def measure_app(
     requests_per_trial: int,
     trials: int,
     clock: Optional[Callable[[], Awaitable[tuple[int, int]]]] = None,
+    allowed_per_level: Optional[int] = None,
+    base_url: Optional[str] = None,
 ) -> dict[str, Any]:
     """Drive one app through the shared in-process client at each concurrency.
 
@@ -286,6 +337,9 @@ async def measure_app(
     and the run fails loudly if a trial crosses the boundary anyway.
     """
     import httpx
+
+    if trials < 1 or requests_per_trial < 1 or not levels or any(n < 1 for n in levels):
+        raise ValueError("positive trials, requests and concurrency levels required")
 
     async def redis_seconds() -> float:
         seconds, micros = await clock()
@@ -300,10 +354,16 @@ async def measure_app(
             await asyncio.sleep(runway + 0.05)
 
     rows = []
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    transport = httpx.ASGITransport(app=app) if base_url is None else None
+    async with httpx.AsyncClient(
+        transport=transport, base_url=base_url or "http://testserver", trust_env=False
+    ) as client:
+        start = time.perf_counter()
+        first = await client.get("/")
+        cold_first_request_ms = _round((time.perf_counter() - start) * 1000)
+        first.raise_for_status()
         # Warm up connection pool, routing, and any lazy script registration.
-        for _ in range(20):
+        for _ in range(19):
             (await client.get("/")).raise_for_status()
 
         for num_clients in levels:
@@ -312,6 +372,7 @@ async def measure_app(
             rates: list[float] = []
             latencies: list[float] = []
             status_counts: dict[int, int] = {}
+            scheduling_delays: list[float] = []
             last_trial_seconds: Optional[float] = None
 
             async def worker(
@@ -348,9 +409,29 @@ async def measure_app(
                             "trial would start in a new minute; the level's fixed-window "
                             "quota would reset and skew the allow counts"
                         )
+
+                async def heartbeat(delays: list[float] = scheduling_delays) -> None:
+                    while True:
+                        due = time.perf_counter() + 0.005
+                        await asyncio.sleep(0.005)
+                        delays.append(max(0, time.perf_counter() - due) * 1000)
+
+                monitor = asyncio.create_task(heartbeat())
+                await asyncio.sleep(0)  # arm before a sync endpoint can block the loop
                 start = time.perf_counter()
-                trial_results = await asyncio.gather(*[worker(w) for w in range(num_clients)])
-                elapsed = time.perf_counter() - start
+                try:
+                    trial_results = await asyncio.gather(
+                        *[
+                            worker(w, per_client + (w < requests_per_trial % num_clients))
+                            for w in range(num_clients)
+                        ]
+                    )
+                    elapsed = time.perf_counter() - start
+                finally:
+                    # Let a late heartbeat wake before cancellation, outside timing.
+                    await asyncio.sleep(0)
+                    monitor.cancel()
+                    await asyncio.gather(monitor, return_exceptions=True)
                 last_trial_seconds = elapsed
                 crossed = clock is not None and int(await redis_seconds()) // 60 != level_minute
                 if crossed:
@@ -364,6 +445,11 @@ async def measure_app(
                     for code, count in worker_statuses.items():
                         status_counts[code] = status_counts.get(code, 0) + count
 
+            total = requests_per_trial * trials
+            allowed = total if allowed_per_level is None else min(total, allowed_per_level)
+            expected = {code: n for code, n in ((200, allowed), (429, total - allowed)) if n}
+            if status_counts != expected:
+                raise StatusDistributionError(num_clients, status_counts, expected)
             ordered = sorted(latencies)
             rows.append(
                 {
@@ -372,6 +458,12 @@ async def measure_app(
                     "latency_p50_ms": _round(_percentile(ordered, 50)),
                     "latency_p99_ms": _round(_percentile(ordered, 99)),
                     "status_counts": status_counts,
+                    "scheduling_delay_ms": {
+                        "interval_ms": 5,
+                        "samples": len(scheduling_delays),
+                        "p99": _round(_percentile(sorted(scheduling_delays), 99)),
+                        "max": _round(max(scheduling_delays, default=0)),
+                    },
                 }
             )
             print(
@@ -380,7 +472,7 @@ async def measure_app(
                 f" | p50 {rows[-1]['latency_p50_ms']:7.3f}ms"
                 f" | statuses {status_counts}"
             )
-    return {"levels": rows}
+    return {"cold_first_request_ms": cold_first_request_ms, "levels": rows}
 
 
 def _percentile(sorted_values: Sequence[float], pct: float) -> float:
@@ -453,6 +545,59 @@ async def measure_redis_floor(redis_client: Any, *, levels: Sequence[int], trial
 # -- orchestration ------------------------------------------------------------
 
 
+async def close_app(app: Any) -> None:
+    closer = getattr(app.state, "close_limiter", None)
+    if closer is not None:
+        await closer()
+    sync_closer = getattr(app.state, "close_limiter_sync", None)
+    if sync_closer is not None:
+        await asyncio.to_thread(sync_closer)
+
+
+async def measure_http_control(app: Any, reset_state: StateReset) -> dict[str, Any]:
+    """Bounded loopback TCP control; client and server still share one loop."""
+    import uvicorn
+
+    # Explicit TCP protocol lets asyncio enable TCP_NODELAY on accepted
+    # sockets; proto=0 would leave small header/body writes subject to Nagle.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(128)
+        server = uvicorn.Server(
+            uvicorn.Config(app, log_level="error", lifespan="off", loop="asyncio", http="h11")
+        )
+        task = asyncio.create_task(server.serve(sockets=[sock]))
+        try:
+
+            async def ready() -> None:
+                while not server.started:
+                    if task.done():
+                        await task
+                        raise RuntimeError("HTTP control server exited before readiness")
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(ready(), timeout=5)
+            result = await asyncio.wait_for(
+                measure_app(
+                    app,
+                    reset_state=reset_state,
+                    levels=[10],
+                    requests_per_trial=200,
+                    trials=1,
+                    base_url=f"http://127.0.0.1:{sock.getsockname()[1]}",
+                ),
+                timeout=30,
+            )
+            return result
+        finally:
+            server.should_exit = True
+            try:
+                await asyncio.wait_for(task, timeout=5)
+            except asyncio.TimeoutError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
 def installed_versions() -> dict[str, str]:
     from importlib.metadata import version
 
@@ -491,7 +636,8 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
         await delete_owned_keys(redis_client, key_prefix)
 
     results: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "provenance": collect_provenance(),
         "benchmark": "moderato-library-comparison",
         "run_id": args.run_id,
         "started_at_utc": started_at.isoformat(),
@@ -532,9 +678,19 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
                 "before the first "
                 "level and its quota consumption is wiped by that level's reset"
             ),
-            "note": "compares libraries as-shipped per their documented usage",
+            "state_note": "first request separately recorded; 20 warmup requests then quota reset",
+            "ordering": (
+                "library order reversed between scenarios; --reverse-order counterbalances "
+                "a second run; trials within a level remain consecutive"
+            ),
+            "http_control": (
+                "optional 200 allowed requests, 10 clients, 1 trial per library over loopback "
+                "TCP with uvicorn; client/server share one event loop; not a deployment model"
+            ),
+            "note": "version-specific harness configurations, not theoretical optima",
         },
         "scenarios": {},
+        "execution_order": [],
     }
 
     print("Measuring raw Redis floor ...")
@@ -547,28 +703,48 @@ async def run_comparison(args: argparse.Namespace) -> dict[str, Any]:
         "limited_100_per_minute": LIMITED_PER_MINUTE,
     }
     try:
-        for scenario, limit in scenarios.items():
-            for name, builder in APP_BUILDERS.items():
+        for index, (scenario, limit) in enumerate(scenarios.items()):
+            builders = list(APP_BUILDERS.items())
+            if bool(index % 2) != args.reverse_order:
+                builders.reverse()
+            for name, builder in builders:
                 await reset_state()
                 print(f"\nScenario {scenario} | {name}")
+                results["execution_order"].append(f"{scenario}/{name}")
                 app = await builder(redis_url, limit, key_prefix)
-                measured = await measure_app(
-                    app,
-                    reset_state=reset_state,
-                    levels=LEVELS,
-                    requests_per_trial=REQUESTS_PER_TRIAL,
-                    trials=args.trials,
-                    clock=redis_client.time if limit == LIMITED_PER_MINUTE else None,
-                )
-                results["scenarios"][f"{scenario}/{name}"] = measured
-                # Close each app's limiter connections so they do not pile
-                # up across the eight (scenario, library) pairs.
-                closer = getattr(app.state, "close_limiter", None)
-                if closer is not None:
-                    await closer()
-                sync_closer = getattr(app.state, "close_limiter_sync", None)
-                if sync_closer is not None:
-                    await asyncio.to_thread(sync_closer)
+                try:
+                    measured = await measure_app(
+                        app,
+                        reset_state=reset_state,
+                        levels=LEVELS,
+                        requests_per_trial=REQUESTS_PER_TRIAL,
+                        trials=args.trials,
+                        clock=redis_client.time if limit == LIMITED_PER_MINUTE else None,
+                        allowed_per_level=limit if name != "plain-fastapi" else None,
+                    )
+                    results["scenarios"][f"{scenario}/{name}"] = measured
+                finally:
+                    await close_app(app)
+        if args.http_control:
+            results["http_control"] = {}
+            for name, builder in APP_BUILDERS.items():
+                await reset_state()
+                app = await builder(redis_url, 1_000_000, key_prefix)
+                try:
+                    print(f"\nLoopback HTTP control | {name}")
+                    results["http_control"][name] = await measure_http_control(app, reset_state)
+                finally:
+                    await close_app(app)
+    except StatusDistributionError as exc:
+        # Preserve partial evidence and counts, but never return it as success.
+        results["failure"] = {
+            "error": str(exc),
+            "clients": exc.clients,
+            "status_counts": exc.status_counts,
+            "expected_status_counts": exc.expected_status_counts,
+        }
+        exc.results = results
+        raise
     finally:
         await reset_state()
         await redis_client.aclose()
@@ -597,8 +773,14 @@ def _cpu_count() -> int:
 
 
 async def main_async(args: argparse.Namespace) -> None:
-    results = await run_comparison(args)
     output = args.json or Path("benchmarks/results") / f"compare-{args.run_id}.json"
+    try:
+        results = await run_comparison(args)
+    except StatusDistributionError as exc:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(exc.results, indent=2) + "\n")
+        print(f"Failed-run evidence: {output}")
+        raise
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(results, indent=2) + "\n")
     print(f"\nMachine-readable results: {output}")
@@ -615,8 +797,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trials", type=int, default=TRIALS)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--json", type=Path, default=None)
+    parser.add_argument("--reverse-order", action="store_true")
+    parser.add_argument("--http-control", action="store_true", help="Bounded loopback TCP control")
     args = parser.parse_args()
 
+    if args.trials < 1:
+        parser.error("--trials must be positive")
     if args.run_id is None:
         args.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     # The run id becomes part of Redis key prefixes and of the SCAN cleanup
@@ -628,7 +814,7 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     parsed = parse_args()
-    target_python = ensure_venv(parsed.venv)
+    target_python = ensure_venv(parsed.venv, parsed.http_control)
     # Compare paths WITHOUT resolving symlinks: both venv pythons may symlink
     # to the same base interpreter, which would wrongly skip the re-exec.
     # Both sides are made absolute so a relative --venv cannot loop forever.

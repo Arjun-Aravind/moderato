@@ -337,11 +337,40 @@ limiter = RateLimiter(
 )
 ```
 
-**Metrics collected:**
-- `moderato_checks_total` - Total rate limit checks
-- `moderato_check_duration_seconds` - Check latency histogram
-- `moderato_limit_exceeded_total` - Rate limit violations
-- `moderato_backend_operations_total` - Redis operations
+**Automatic collection with `RateLimiter(enable_metrics=True)`:**
+
+| Metric | Meaning |
+| --- | --- |
+| `moderato_checks_total{algorithm,result}` | Confirmed `allowed`/`denied` decisions and separate `bypassed` checks |
+| `moderato_check_duration_seconds{algorithm}` | Decision/bypass latency; failed checks that raise do not contribute |
+| `moderato_limit_exceeded_total{algorithm,tenant_type}` | Confirmed quota denials |
+| `moderato_fail_open_total{algorithm}` | Checks bypassed without a confirmed backend decision |
+| `moderato_backend_operations_total{operation,status}` | Algorithm check calls, with `success`/`error`, not every Redis command or administrative API |
+| `moderato_backend_operation_duration_seconds{operation}` | Algorithm backend-check latency, including errors |
+| `moderato_redis_operations_total{command,status}` | Completed client calls for `PING`, `SCRIPT LOAD`, `EVALSHA`, and `EVAL`, with successful replies or Redis errors |
+| `moderato_redis_script_executions_total{script_name,execution_type}` | Lua calls with successful Redis replies, including quota denials, split by `evalsha`/`eval` |
+| `moderato_redis_connection_errors_total` | Redis connection exceptions from those instrumented commands |
+
+The last three Redis-specific families are wired automatically in the unreleased
+follow-up to 0.5.0; published 0.5.0 exposes them but does not update them automatically.
+Command counters measure client calls, not Redis's internal Lua commands or wire-level
+retries. A `NOSCRIPT` miss counts as an `EVALSHA` error followed by an `EVAL` call;
+only the successful fallback counts as a script execution. Other errors are not
+retried by Moderato. Cancelled calls are not counted as successful or failed replies.
+These counters cannot establish whether a decision was applied if its reply was lost.
+
+**Manual instrumentation:** `moderato_current_usage{key,algorithm}` and
+`moderato_limit_value{key,algorithm}` require `metrics.update_usage_gauge(...)`;
+`moderato_active_redis_connections` requires `metrics.set_active_connections(...)`.
+Moderato does not sample per-client usage or connection-pool internals automatically.
+An unpopulated gauge is not evidence of unused quota or an empty pool. If you use
+usage labels, choose a small, bounded, non-sensitive key set, remove obsolete label
+children, and account for stale snapshots. Key truncation does not bound cardinality
+or sanitize secrets. Keep `tenant_type` labels bounded too.
+
+The `moderato` prefix is the default; call `init_metrics(namespace="your_app")`
+before constructing metrics-enabled limiters to use a custom namespace. Limiters
+reuse the process-global collector rather than registering duplicate metrics.
 
 **Expose metrics endpoint:**
 ```python
@@ -351,6 +380,15 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 async def metrics():
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 ```
+
+**Multiple workers:** the default registry and global collector are process-local.
+Shared Redis quotas do not aggregate Prometheus counters. Scraping a load-balanced
+`/metrics` endpoint may hit a different worker each time and produce misleading
+counter resets. Prefer separately addressable worker targets; sum compatible counters
+or histogram rates in Prometheus. Alternatively configure prometheus-client's
+multiprocess mode with its required directory lifecycle and multiprocess scrape
+registry; Moderato does not configure that mode for you. Do not assume manually
+maintained usage/connection gauges can be summed without defining their ownership.
 
 ### Multi-Tenant Setup
 
@@ -470,6 +508,19 @@ from downstream manual checks, usage snapshots, or resets into 503 responses
 before a response starts. These operations still raise normally outside HTTP;
 unrelated exception types are not translated. Once ASGI response headers have
 been sent, an error is propagated rather than starting a second response.
+
+**Streaming limitation:** `RateLimitHeadersMiddleware` uses Starlette's
+`BaseHTTPMiddleware`. If a streaming body raises after headers were sent, its
+status can no longer change to 503. Depending on the Starlette version, the client
+may receive an incomplete HTTP response or a normally framed HTTP 200 containing
+only part of the intended body, even though the exception reaches server logs.
+Completed partial responses were observed with Starlette 0.46.0 and 1.7.0;
+0.27.0 and 0.45.3 left responses incomplete in the tested HTTP/1.1 Uvicorn stacks.
+A no-op `BaseHTTPMiddleware` reproduced the same distinction, so substituting
+another subclass does not resolve it. These are sampled versions, not a complete
+affected-version range. For integrity-sensitive streams, require an application
+completion marker or validated length/checksum and treat its absence as failure;
+HTTP 200 and transport completion alone do not establish stream completeness.
 
 For availability-first applications, explicitly opt into fail-open:
 

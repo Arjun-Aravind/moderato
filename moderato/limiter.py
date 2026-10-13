@@ -125,7 +125,6 @@ class RateLimiter:
             enable_metrics=enable_metrics or fail_open,
             fail_open=fail_open,
         )
-        self.backend = RedisBackend(self.config)
         self._connected = False
         self._lock = asyncio.Lock()
         self.metrics: Optional[Any] = None
@@ -143,6 +142,7 @@ class RateLimiter:
                 ) from exc
             self.metrics = get_metrics() or init_metrics()
 
+        self.backend = RedisBackend(self.config, metrics=self.metrics)
         redacted_config = self.config.model_copy(
             update={"redis_url": _redact_redis_url(self.config.redis_url)}
         )

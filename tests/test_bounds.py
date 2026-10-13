@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI, Request
 from redis.exceptions import ResponseError
 
-from moderato import CheckResult, RateLimitConfigError, RateLimiter, RateLimitExceeded
+from moderato import BackendError, CheckResult, RateLimitConfigError, RateLimiter, RateLimitExceeded
 from moderato.decorators import RateLimitMiddleware
 from moderato.middleware import RateLimitHeadersMiddleware
 from moderato.utils import parse_rate
@@ -193,6 +193,20 @@ async def test_lua_rejects_unsafe_domain_before_mutation(redis_client, algorithm
     )
     with pytest.raises(ResponseError):
         await redis_client.eval(source, 1, prefix, *args)
+    assert not [key async for key in redis_client.scan_iter(match=f"{prefix}*")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution", ["evalsha", "eval"])
+async def test_backend_sliding_rejects_fractional_capacity(
+    clean_limiter, redis_client, monkeypatch, execution
+):
+    backend = clean_limiter.backend
+    if execution == "eval":
+        monkeypatch.delitem(backend._script_shas, "sliding_window")
+    prefix = f"bounds-fractional:{uuid4().hex}:"
+    with pytest.raises(BackendError):
+        await backend.check_sliding_window(prefix, 1000.5, 60)
     assert not [key async for key in redis_client.scan_iter(match=f"{prefix}*")]
 
 

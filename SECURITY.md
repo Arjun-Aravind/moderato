@@ -4,8 +4,10 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.3.x   | ✅        |
-| < 0.3   | ❌        |
+| 0.4.x   | ✅        |
+| < 0.4   | ❌        |
+
+Version 0.5.0 is in development, not a published supported release yet.
 
 ## Reporting a vulnerability
 
@@ -30,7 +32,7 @@ Moderato is infrastructure security tooling, so a few design decisions are worth
 
 - Keys are built from user-supplied identifiers. Identifier components are normalized and hashed when they exceed 100 characters to keep keys bounded; the limiter never passes raw, unbounded user input into Redis key slots.
 - The default decorator scope is derived from the HTTP method and route path. Client-IP extraction from proxy headers (`X-Forwarded-For` and friends) is controlled by `trust_proxy_headers`: when enabled, these headers take precedence over the direct client address; leave it `False` unless the application is behind a reverse proxy you control that overwrites these headers.
-- Rate-limit checks and updates run through atomic Lua scripts that never execute user-supplied strings. Fixed-window and sliding-window accounting is integer-only; the token bucket accumulates fractional refills in floating point with millisecond precision. Administrative `reset()` deletes keys directly with `SCAN`/`DEL` and does not interleave with checks atomically.
+- Rate-limit checks and updates run through atomic Lua scripts that never execute user-supplied strings. Fixed-window and sliding-window accounting use integer arithmetic. In the unreleased 0.5.0 implementation, public token policies use bounded exact integer refill arithmetic with millisecond time resolution; independent custom backend refill rates use floating-point math with explicit numeric bounds. Administrative `reset()` deletes keys directly with `SCAN`/`DEL` and does not interleave with checks atomically.
 - Costs passed to `check()` are validated as strictly positive integers before any Redis call is made.
 
 If you believe a rate limit can be bypassed or key state can leak across tenants or routes, that is a security bug — please report it privately.

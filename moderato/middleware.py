@@ -81,8 +81,8 @@ class RateLimitHeadersMiddleware(BaseHTTPMiddleware):
             # Call the next middleware or route handler
             response = await call_next(request)
 
-            # Add rate limit headers if available
-            if hasattr(request.state, "rate_limit_info") and request.state.rate_limit_info:
+            # A handled service outage must not advertise successful quota metadata.
+            if response.status_code != 503 and request.state.rate_limit_info:
                 self._add_headers(response, request.state.rate_limit_info)
 
             return response

@@ -457,11 +457,7 @@ class RateLimitMiddleware:
                 scope="middleware",
             )
         except BackendError:
-            from starlette.responses import JSONResponse
-
-            await JSONResponse(
-                status_code=503, content={"error": "Rate limit backend unavailable"}
-            )(scope, receive, send)
+            await self._send_backend_unavailable(send)
             return
         except RateLimitExceeded as e:
             result = None
@@ -483,11 +479,7 @@ class RateLimitMiddleware:
             except BackendError:
                 if response_started:
                     raise
-                from starlette.responses import JSONResponse
-
-                await JSONResponse(
-                    status_code=503, content={"error": "Rate limit backend unavailable"}
-                )(scope, receive, send)
+                await self._send_backend_unavailable(send)
             return
 
         retry_after = denial.retry_after
@@ -521,3 +513,19 @@ class RateLimitMiddleware:
             }
         )
         return
+
+    @staticmethod
+    async def _send_backend_unavailable(send: Any) -> None:
+        """Send the ASGI failure response without optional framework dependencies."""
+        body = b'{"error":"Rate limit backend unavailable"}'
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})

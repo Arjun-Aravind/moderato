@@ -11,9 +11,9 @@
 
 A Redis-backed rate limiting library for async Python applications.
 
-**Release status:** this checkout prepares **0.5.0**, but it is not yet tagged or
-published. The PyPI badge reflects the published version; installation from PyPI
-may still provide 0.4.0 and its earlier behavior.
+**Version 0.5.0:** review the [changelog and upgrade notes](CHANGELOG.md#v050-2026-10-13)
+before upgrading, especially the token-bucket key migration and default mounted-route
+scope changes, which start fresh quotas.
 
 [Features](#features) | [Quick Start](#quick-start) | [Algorithms](#algorithms) | [Documentation](#documentation) | [Examples](#examples)
 

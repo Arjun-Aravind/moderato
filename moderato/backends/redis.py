@@ -3,9 +3,9 @@ Redis backend implementation for rate limiting.
 """
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from pathlib import Path
-from typing import Any, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional, TypeVar, Union
 
 import anyio
 import redis.asyncio as redis
@@ -15,7 +15,11 @@ from redis.exceptions import NoScriptError, RedisError
 from ..exceptions import BackendError
 from ..models import RateLimitConfig
 
+if TYPE_CHECKING:
+    from ..metrics import RateLimitMetrics
+
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 class RateLimitResult(NamedTuple):
@@ -35,14 +39,16 @@ class RedisBackend:
     preventing race conditions in distributed environments.
     """
 
-    def __init__(self, config: RateLimitConfig):
+    def __init__(self, config: RateLimitConfig, metrics: Optional["RateLimitMetrics"] = None):
         """
         Initialize Redis backend.
 
         Args:
             config: Rate limiter configuration
+            metrics: Optional collector for script and connection command telemetry
         """
         self.config = config
+        self.metrics = metrics
         self._redis: Optional[redis.Redis[bytes]] = None
         self._scripts: dict[str, str] = {}
         self._script_shas: dict[str, str] = {}
@@ -107,7 +113,7 @@ class RedisBackend:
             )
 
             # Test connection
-            await self._redis.ping()
+            await self._run_redis_operation("PING", self._redis.ping())
 
             # Load scripts into Redis for better performance
             await self._register_scripts()
@@ -137,7 +143,9 @@ class RedisBackend:
         for name, script in self._scripts.items():
             try:
                 # Register script and store SHA for EVALSHA calls
-                sha = await self._redis.script_load(script)  # type: ignore[no-untyped-call]
+                sha = await self._run_redis_operation(
+                    "SCRIPT LOAD", self._redis.script_load(script)  # type: ignore[no-untyped-call]
+                )
                 self._script_shas[name] = sha
                 logger.debug(f"Registered script '{name}' with SHA: {sha}")
             except Exception as e:
@@ -157,6 +165,20 @@ class RedisBackend:
                 await close()
             self._redis = None
             logger.debug("Closed Redis client")
+
+    async def _run_redis_operation(self, command: str, awaitable: Awaitable[T]) -> T:
+        """Count completed command attempts without retrying or changing errors."""
+        try:
+            result = await awaitable
+        except RedisError as exc:
+            if self.metrics is not None:
+                self.metrics.record_redis_operation(command, success=False)
+                if isinstance(exc, RedisConnectionError):
+                    self.metrics.record_redis_error()
+            raise
+        if self.metrics is not None:
+            self.metrics.record_redis_operation(command, success=True)
+        return result
 
     async def check_fixed_window(
         self,
@@ -193,28 +215,9 @@ class RedisBackend:
             raise BackendError("Redis not connected. Call connect() first.")
 
         try:
-            # Try EVALSHA first for better performance
-            if "fixed_window" in self._script_shas:
-                try:
-                    result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
-                        self._script_shas["fixed_window"],
-                        1,  # number of keys
-                        key_prefix.encode(),  # KEYS[1]
-                        str(max_requests).encode(),  # ARGV[1]
-                        str(window_seconds).encode(),  # ARGV[2]
-                        str(cost).encode(),  # ARGV[3] - cost
-                    )
-                except NoScriptError:
-                    # Script not in cache, fall back to EVAL
-                    logger.debug("Script not in cache, using EVAL")
-                    result = await self._execute_script(
-                        "fixed_window", key_prefix, max_requests, window_seconds, cost
-                    )
-            else:
-                # No SHA available, use EVAL
-                result = await self._execute_script(
-                    "fixed_window", key_prefix, max_requests, window_seconds, cost
-                )
+            result = await self._execute_script(
+                "fixed_window", key_prefix, max_requests, window_seconds, cost
+            )
 
             # Parse result
             if not isinstance(result, list) or len(result) != 4:
@@ -242,27 +245,40 @@ class RedisBackend:
     async def _execute_script(
         self,
         script_name: str,
-        key_prefix: str,
-        max_requests: int,
-        window_seconds: int,
-        cost: int = 1000,
+        key: str,
+        *args: Union[int, float],
     ) -> Any:
-        """Execute Lua script with EVAL."""
+        """Execute a cached Lua script, falling back only on NOSCRIPT."""
         if not self._redis:
             raise BackendError("Redis not connected")
+
+        encoded_args = [str(value).encode() for value in args]
+        if script_name in self._script_shas:
+            try:
+                result = await self._run_redis_operation(
+                    "EVALSHA",
+                    self._redis.evalsha(  # type: ignore[no-untyped-call]
+                        self._script_shas[script_name], 1, key.encode(), *encoded_args
+                    ),
+                )
+            except NoScriptError:
+                logger.debug("Script not in cache, using EVAL")
+            else:
+                if self.metrics is not None:
+                    self.metrics.record_script_execution(script_name, used_cache=True)
+                return result
 
         script = self._scripts.get(script_name)
         if not script:
             raise BackendError(f"Script '{script_name}' not found")
 
-        return await self._redis.eval(  # type: ignore[no-untyped-call]
-            script,
-            1,  # number of keys
-            key_prefix.encode(),  # KEYS[1]
-            str(max_requests).encode(),  # ARGV[1]
-            str(window_seconds).encode(),  # ARGV[2]
-            str(cost).encode(),  # ARGV[3]
+        result = await self._run_redis_operation(
+            "EVAL",
+            self._redis.eval(script, 1, key.encode(), *encoded_args),  # type: ignore[no-untyped-call]
         )
+        if self.metrics is not None:
+            self.metrics.record_script_execution(script_name, used_cache=False)
+        return result
 
     async def check_token_bucket(
         self,
@@ -298,29 +314,9 @@ class RedisBackend:
             raise BackendError("Redis not connected. Call connect() first.")
 
         try:
-            # Try EVALSHA first for better performance
-            if "token_bucket" in self._script_shas:
-                try:
-                    result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
-                        self._script_shas["token_bucket"],
-                        1,  # number of keys
-                        key.encode(),  # KEYS[1]
-                        str(max_tokens).encode(),  # ARGV[1]
-                        str(refill_rate_per_second).encode(),  # ARGV[2] - float tokens/sec
-                        str(window_seconds).encode(),  # ARGV[3] - for TTL
-                        str(cost).encode(),  # ARGV[4]
-                    )
-                except NoScriptError:
-                    # Script not in cache, fall back to EVAL
-                    logger.debug("Script not in cache, using EVAL")
-                    result = await self._execute_token_bucket_script(
-                        key, max_tokens, refill_rate_per_second, window_seconds, cost
-                    )
-            else:
-                # No SHA available, use EVAL
-                result = await self._execute_token_bucket_script(
-                    key, max_tokens, refill_rate_per_second, window_seconds, cost
-                )
+            result = await self._execute_script(
+                "token_bucket", key, max_tokens, refill_rate_per_second, window_seconds, cost
+            )
 
             # Parse result
             if not isinstance(result, list) or len(result) != 4:
@@ -344,32 +340,6 @@ class RedisBackend:
         except Exception as e:
             logger.error(f"Unexpected error during token bucket check: {e}")
             raise BackendError(f"Unexpected error: {e}") from e
-
-    async def _execute_token_bucket_script(
-        self,
-        key: str,
-        max_tokens: int,
-        refill_rate_per_second: float,
-        window_seconds: int,
-        cost: int = 1000,
-    ) -> Any:
-        """Execute token bucket Lua script with EVAL."""
-        if not self._redis:
-            raise BackendError("Redis not connected")
-
-        script = self._scripts.get("token_bucket")
-        if not script:
-            raise BackendError("Token bucket script not loaded")
-
-        return await self._redis.eval(  # type: ignore[no-untyped-call]
-            script,
-            1,  # number of keys
-            key.encode(),  # KEYS[1]
-            str(max_tokens).encode(),  # ARGV[1]
-            str(refill_rate_per_second).encode(),  # ARGV[2]
-            str(window_seconds).encode(),  # ARGV[3]
-            str(cost).encode(),  # ARGV[4]
-        )
 
     async def get_token_bucket_usage(self, key: str) -> dict[str, Any]:
         """
@@ -438,28 +408,9 @@ class RedisBackend:
             raise BackendError("Redis not connected. Call connect() first.")
 
         try:
-            # Try EVALSHA first for better performance
-            if "sliding_window" in self._script_shas:
-                try:
-                    result = await self._redis.evalsha(  # type: ignore[no-untyped-call]
-                        self._script_shas["sliding_window"],
-                        1,  # number of keys
-                        key_prefix.encode(),  # KEYS[1]
-                        str(max_requests).encode(),  # ARGV[1]
-                        str(window_seconds).encode(),  # ARGV[2]
-                        str(cost).encode(),  # ARGV[3]
-                    )
-                except NoScriptError:
-                    # Script not in cache, fall back to EVAL
-                    logger.debug("Script not in cache, using EVAL")
-                    result = await self._execute_script(
-                        "sliding_window", key_prefix, max_requests, window_seconds, cost
-                    )
-            else:
-                # No SHA available, use EVAL
-                result = await self._execute_script(
-                    "sliding_window", key_prefix, max_requests, window_seconds, cost
-                )
+            result = await self._execute_script(
+                "sliding_window", key_prefix, max_requests, window_seconds, cost
+            )
 
             # Parse result
             if not isinstance(result, list) or len(result) != 4:
@@ -665,7 +616,7 @@ class RedisBackend:
             return False
 
         try:
-            await self._redis.ping()
+            await self._run_redis_operation("PING", self._redis.ping())
             return True
         except Exception:
             return False

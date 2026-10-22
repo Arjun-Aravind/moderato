@@ -354,3 +354,88 @@ async def test_limiter_records_backend_errors(clean_limiter, monkeypatch):
         )
         == before + 1
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("algorithm", ["fixed_window", "token_bucket", "sliding_window"])
+async def test_redis_metrics_distinguish_cached_fallback_and_failed_decisions(
+    redis_url, redis_client, algorithm
+):
+    metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
+    prefix = f"metrics:{uuid.uuid4().hex}"
+    limiter = RateLimiter(redis_url=redis_url, key_prefix=prefix, enable_metrics=True)
+
+    def command(name, status):
+        return _sample(
+            f"{metrics.namespace}_redis_operations_total", {"command": name, "status": status}
+        )
+
+    def executions(kind):
+        return _sample(
+            f"{metrics.namespace}_redis_script_executions_total",
+            {"script_name": algorithm, "execution_type": kind},
+        )
+
+    kwargs = {"key": "client", "rate": "2/day", "algorithm": algorithm}
+    try:
+        first = await limiter.check_with_info(**kwargs)
+        assert first.allowed and first.remaining == 1
+        assert command("PING", "success") == 1
+        assert command("SCRIPT LOAD", "success") == 3
+        assert command("EVALSHA", "success") == executions("evalsha") == 1
+
+        await redis_client.script_flush()
+        denied = await limiter.check_with_info(**kwargs, cost=2)
+        assert not denied.allowed and denied.remaining == 1
+        assert command("EVALSHA", "error") == 1
+        assert command("EVAL", "success") == executions("eval") == 1
+        assert await limiter.check(**kwargs)
+        assert command("EVALSHA", "success") == executions("evalsha") == 2
+
+        # A real Redis WRONGTYPE is not permission to retry with EVAL.
+        keys = await redis_client.keys(f"{prefix}:*")
+        assert len(keys) == 1
+        if algorithm == "token_bucket":
+            await redis_client.set(keys[0], "wrong type")
+        else:
+            await redis_client.delete(keys[0])
+            await redis_client.hset(keys[0], "field", "wrong type")
+        with pytest.raises(BackendError):
+            await limiter.check_with_info(**kwargs)
+        assert command("EVALSHA", "error") == 2
+        assert command("EVAL", "success") == executions("eval") == 1
+        assert executions("evalsha") == 2
+        # NOSCRIPT/WRONGTYPE are not connection failures.
+        assert _sample(f"{metrics.namespace}_redis_connection_errors_total", {}) == 0
+        assert await limiter.health_check()
+        assert command("PING", "success") == 2
+        assert not list(metrics.current_usage.collect())[0].samples
+        assert not list(metrics.limit_value.collect())[0].samples
+    finally:
+        await limiter.close()
+
+
+@pytest.mark.asyncio
+async def test_redis_metrics_record_connection_failure_without_admission():
+    metrics = init_metrics(namespace=f"test_{uuid.uuid4().hex}")
+    limiter = RateLimiter(redis_url="redis://127.0.0.1:1", enable_metrics=True)
+    try:
+        with pytest.raises(BackendError):
+            await limiter.check("client", "2/day")
+        assert (
+            _sample(
+                f"{metrics.namespace}_redis_operations_total",
+                {"command": "PING", "status": "error"},
+            )
+            == 1
+        )
+        assert _sample(f"{metrics.namespace}_redis_connection_errors_total", {}) == 1
+        assert (
+            _sample(
+                f"{metrics.namespace}_checks_total",
+                {"algorithm": "fixed_window", "result": "allowed"},
+            )
+            == 0
+        )
+    finally:
+        await limiter.close()

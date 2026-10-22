@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- Metrics-enabled limiters now populate Redis command counters for connection/health `PING`, script registration, and Lua decision dispatch. Successful Lua replies are counted separately for cached `EVALSHA` and fallback `EVAL`; a `NOSCRIPT` miss is an errored command attempt, not a successful script execution. Redis connection exceptions from these commands are recorded without changing retry or admission behavior.
+- Documented the exact automatic metrics contract, process-local worker collection, and manually populated usage/connection gauges. Per-client usage labels remain opt-in to avoid unbounded automatic series creation; an uninstrumented zero gauge is not a measured pool or quota state.
+- Documented version-dependent partial-stream HTTP 200 behavior inherited from Starlette `BaseHTTPMiddleware`, with completion-marker or validated-length/checksum guidance. No middleware rewrite or dependency pin was introduced.
+
 ## v0.5.0 (2026-10-13)
 
 ### Behavior changes

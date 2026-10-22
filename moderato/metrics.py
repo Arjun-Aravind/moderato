@@ -1,8 +1,8 @@
 """
 Prometheus metrics support for rate limiting observability.
 
-This module provides comprehensive metrics collection for monitoring
-rate limiter performance, usage patterns, and system health.
+RateLimiter automatically records decision, backend-check, and instrumented
+Redis command metrics. Usage and connection gauges are manual instrumentation.
 """
 
 import logging
@@ -22,12 +22,15 @@ class RateLimitMetrics:
     """
     Prometheus metrics collector for rate limiting.
 
-    This class provides comprehensive metrics for monitoring:
-    - Rate limit check operations
-    - Rate limit violations
-    - Backend performance
-    - Error rates
-    - System health
+    RateLimiter automatically records checks, violations, bypasses, backend-check
+    latency/status, and Redis PING, SCRIPT LOAD, EVALSHA and EVAL calls. Successful
+    Lua replies are counted by script and execution type. Redis connection errors
+    are counted for these instrumented commands.
+
+    Usage/limit and active-connection gauges require explicit application updates;
+    they are not automatically sampled from Redis or its pool. The default
+    Prometheus registry and global collector are process-local, not an aggregate
+    of server workers. Manual methods can also be used with custom backends.
 
     Metrics follow Prometheus naming conventions and best practices.
 
@@ -40,7 +43,8 @@ class RateLimitMetrics:
             enable_metrics=True
         )
 
-        # Metrics are automatically collected
+        # Decision and instrumented backend metrics are automatically collected.
+        # Usage/connection gauges require explicit application instrumentation.
         # Expose metrics endpoint in your app:
 
         from fastapi import FastAPI, Response
@@ -121,7 +125,7 @@ class RateLimitMetrics:
         # Redis-specific metrics
         self.redis_operations_total = Counter(
             f"{self.namespace}_redis_operations_total",
-            "Total number of Redis operations",
+            "Completed instrumented Redis command calls by reply status",
             ["command", "status"],
         )
 
@@ -132,7 +136,7 @@ class RateLimitMetrics:
 
         self.redis_script_executions = Counter(
             f"{self.namespace}_redis_script_executions_total",
-            "Total number of Lua script executions",
+            "Lua script calls with successful Redis replies",
             ["script_name", "execution_type"],  # execution_type: evalsha, eval
         )
 
@@ -275,7 +279,9 @@ class RateLimitMetrics:
 
     def record_script_execution(self, script_name: str, used_cache: bool) -> None:
         """
-        Record Lua script execution.
+        Record a Lua call with a successful Redis reply, including quota denials.
+
+        Failed commands and NOSCRIPT misses are not successful script executions.
 
         Args:
             script_name: Name of the script
@@ -291,7 +297,11 @@ class RateLimitMetrics:
 
     def update_usage_gauge(self, key: str, algorithm: str, current: int, limit: int) -> None:
         """
-        Update current usage gauges.
+        Manually update usage gauges; RateLimiter does not call this method.
+
+        Use a bounded, non-sensitive set of keys. Truncating labels does not bound
+        series cardinality or remove credentials. Values are snapshots and may
+        become stale; remove label children when they are no longer needed.
 
         Args:
             key: Rate limit key
@@ -310,7 +320,10 @@ class RateLimitMetrics:
 
     def set_active_connections(self, count: int) -> None:
         """
-        Update active Redis connections count.
+        Manually set an application-observed Redis connection count.
+
+        RateLimiter does not sample connection-pool internals. A default zero
+        without application instrumentation is not evidence of an empty pool.
 
         Args:
             count: Number of active connections

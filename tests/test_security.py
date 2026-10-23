@@ -736,10 +736,10 @@ class TestPolicyIsolation:
             await limiter.close()
 
     @pytest.mark.asyncio
-    async def test_negative_cost_rejected(self, redis_url):
+    async def test_negative_cost_rejected(self, frozen_limiter):
         """Negative cost must be rejected instead of restoring capacity."""
-        limiter = RateLimiter(redis_url=redis_url, key_prefix="neg-cost")
-        await limiter.connect()
+        # Keep real Lua checks in one window even if the runner crosses a second.
+        limiter = frozen_limiter
         try:
             key = f"neg-{uuid4().hex}"
 

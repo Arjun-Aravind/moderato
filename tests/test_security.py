@@ -128,9 +128,10 @@ class TestKeyCollisionPrevention:
             assert key == same
 
     @pytest.mark.asyncio
-    async def test_collision_prevention_in_practice(self, clean_limiter):
+    async def test_collision_prevention_in_practice(self, frozen_limiter):
         """Integration test: verify keys don't collide in actual rate limiting."""
-        limiter = clean_limiter
+        # Test key isolation without a minute boundary refreshing the exhausted quota.
+        limiter = frozen_limiter
         rate = "5/minute"
 
         # Use up limit for "user:123"

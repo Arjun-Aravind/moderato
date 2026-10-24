@@ -509,6 +509,14 @@ before a response starts. These operations still raise normally outside HTTP;
 unrelated exception types are not translated. Once ASGI response headers have
 been sent, an error is propagated rather than starting a second response.
 
+**Starlette compatibility:** the framework extra excludes 0.46.0 and 0.46.1.
+Those versions re-raise downstream exceptions even after this middleware has
+handled them, causing server errors and broken HTTP keep-alive connections after
+429/422/503 responses. Starlette fixed this in
+[0.46.2](https://www.starlette.io/release-notes/#0462-april-13-2025).
+Base-only installations that independently install Starlette must also avoid
+these two versions. This exclusion does not resolve the streaming limitation below.
+
 **Streaming limitation:** `RateLimitHeadersMiddleware` uses Starlette's
 `BaseHTTPMiddleware`. If a streaming body raises after headers were sent, its
 status can no longer change to 503. Depending on the Starlette version, the client

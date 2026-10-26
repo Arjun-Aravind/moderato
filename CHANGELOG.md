@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.1 (2026-10-26)
+
+### Fixed
+
+- Correct stale 0.6.0 release-preparation and unpublished-status wording in README (also the package long description), security policy, and contributor guidance. Publication availability is determined by PyPI, not repository version metadata; security support applies to published releases, with 0.5.x and 0.4.x support retained.
+- Align package, runtime, and Commitizen versions at 0.6.1 and refresh consumer qualification examples. This is a documentation/version-metadata correction only: runtime implementation, Lua resources, dependencies, Python compatibility, Redis key schemas, quota accounting, metrics, and failure policy are unchanged from 0.6.0. No migration is needed from 0.6.0.
+
 ## v0.6.0 (2026-10-26)
 
 ### Changed

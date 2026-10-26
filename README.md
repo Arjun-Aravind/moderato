@@ -11,16 +11,18 @@
 
 A Redis-backed rate limiting library for async Python applications.
 
-**Version 0.6.0 (release preparation; not yet published):** review the
-[0.6.0 release notes](CHANGELOG.md#v060-2026-10-26) before upgrading. Python 3.9
+**Version 0.6.1:** a documentation/status correction with no runtime or dependency
+changes from 0.6.0. Review the [0.6.1 release notes](CHANGELOG.md#v061-2026-10-26)
+and [0.6.0 release notes](CHANGELOG.md#v060-2026-10-26) before upgrading. Python 3.9
 is no longer supported; use CPython 3.10–3.14, preferably a security-maintained
 minor. Framework extras reject Starlette 0.46.0/0.46.1; regenerate dependency
 locks rather than forcing these versions. Redis command/script telemetry is now
 populated automatically when metrics are enabled. No quota/key migration is
 needed from 0.5.0. When upgrading from 0.4.x or earlier, also follow the
 [0.5.0 upgrade notes](CHANGELOG.md#v050-2026-10-13): token-bucket keys and default
-mounted-route scopes change, starting fresh quotas. The latest published release
-remains 0.5.0 until 0.6.0 is published.
+mounted-route scopes change, starting fresh quotas. Check
+[PyPI](https://pypi.org/project/moderato/) for published distributions; repository
+version metadata and release notes alone do not establish publication.
 
 [Features](#features) | [Quick Start](#quick-start) | [Algorithms](#algorithms) | [Documentation](#documentation) | [Examples](#examples)
 
@@ -718,7 +720,7 @@ and the atomic Lua scripts in `moderato/scripts/` — both are heavily tested
 
 ## Python support policy
 
-Moderato 0.6.0 targets standard CPython **3.10–3.14**
+Moderato 0.6.x targets standard CPython **3.10–3.14**
 (`>=3.10,<3.15`). Python 3.9 support is removed; Python 3.15, prereleases,
 free-threaded builds, and alternative interpreters are not qualified.
 Published older releases retain their original metadata.

@@ -771,16 +771,17 @@ Example: 1.2.3
 
 **Release gate:** reconcile `SECURITY.md`, the intended `CHANGELOG.md` release
 section, and package/runtime/Commitizen versions before tagging or publishing.
-The 0.6.0 candidate has aligned metadata and a dated changelog, but remains
-unpublished. Preflight verifies versions and release notes, not qualification,
-publication, or authorization. Preserve the exact candidate's distribution
-hashes and test evidence. Before an authorized publication, update README and
-SECURITY publication status and requalify the resulting artifacts. Pushing a
+Preflight verifies versions and release notes, not qualification, publication,
+or authorization. Keep README and SECURITY wording valid both before and after
+publication: refer to PyPI for availability and scope security support to
+published releases, rather than embedding a temporary publication status.
+Preserve the exact candidate's distribution hashes and test evidence; requalify
+artifacts after any documentation or metadata change. Pushing a
 `v*` tag triggers `.github/workflows/release.yml`, which creates a GitHub release
 and publishes to PyPI; do not push a tag merely to test preflight. Its Python
 3.12 build interpreter does not replace the Python 3.10–3.14 qualification gate.
 
-1. **Update Version**: In `pyproject.toml`
+1. **Update Version**: Align package and Commitizen versions in `pyproject.toml` and runtime `__version__` in `moderato/__init__.py`
 2. **Update CHANGELOG**: Document all changes
 3. **Run Full Test Suite**: Ensure all tests pass
 4. **Update Documentation**: Ensure docs are current

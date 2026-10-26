@@ -10,7 +10,6 @@ These tests validate:
 """
 
 import asyncio
-import time
 from uuid import uuid4
 
 import anyio
@@ -94,9 +93,9 @@ class TestExtremeValues:
         assert usage["limit"] == 1000000
         assert usage["remaining"] == 999900
 
-    async def test_very_short_window(self, clean_limiter):
+    async def test_very_short_window(self, frozen_limiter, redis_client):
         """Test that very short window (per second) works correctly."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"short-window-{uuid4().hex}"
         rate = "5/second"
 
@@ -105,11 +104,14 @@ class TestExtremeValues:
             await limiter.check(key=key, rate=rate)
 
         # Should be rate limited
+        before, _ = await redis_client.time()
         with pytest.raises(RateLimitExceeded) as exc_info:
             await limiter.check(key=key, rate=rate)
+        after, _ = await redis_client.time()
 
-        # retry_after should be <= 1 second
-        assert exc_info.value.retry_after <= 1
+        # The one-second deadline is virtual; PTTL still uses real Redis time.
+        frozen, _ = await limiter.backend.get_redis_time()
+        assert frozen + 1 - after <= exc_info.value.retry_after <= frozen + 1 - before
 
     async def test_very_long_window(self, clean_limiter):
         """Test that very long window (per day) works correctly."""
@@ -331,6 +333,10 @@ class TestConnectionHandling:
 class TestCheckWithInfo:
     """Tests for check_with_info() API (I1 fix - eliminates double Redis read)."""
 
+    @pytest.fixture(autouse=True)
+    async def quota_clock(self, clean_limiter, freeze_limiter_time):
+        await freeze_limiter_time(clean_limiter)
+
     async def test_returns_check_result(self, clean_limiter):
         """Test that check_with_info returns CheckResult dataclass."""
         limiter = clean_limiter
@@ -370,7 +376,8 @@ class TestCheckWithInfo:
         assert result.allowed is False
         assert result.remaining == 0
         assert result.retry_after > 0
-        assert int(time.time()) - 60 < result.reset_at <= int(time.time()) + 60
+        now, _ = await limiter.backend.get_redis_time()
+        assert now < result.reset_at <= now + 60
 
     async def test_check_with_info_remaining_decrements(self, clean_limiter):
         """Test that remaining decrements with each request."""
@@ -399,26 +406,26 @@ class TestCheckWithInfo:
 class TestAlgorithmAwareGetUsage:
     """Tests for algorithm-aware get_usage() (C6 fix)."""
 
-    async def test_get_usage_fixed_window(self, clean_limiter):
+    async def test_get_usage_fixed_window(self, frozen_limiter, redis_client):
         """Test get_usage with fixed_window algorithm."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"usage-fw-{uuid4().hex}"
         rate = "100/minute"
 
         for _ in range(25):
             await limiter.check(key=key, rate=rate, algorithm="fixed_window")
 
+        before, _ = await redis_client.time()
         usage = await limiter.get_usage(key=key, rate=rate, algorithm="fixed_window")
+        after, _ = await redis_client.time()
+        frozen, _ = await limiter.backend.get_redis_time()
 
         assert usage["current"] == 25
         assert usage["limit"] == 100
         assert usage["remaining"] == 75
-        # TTL truncates to whole seconds, so a run landing in the final second
-        # of the window legitimately reports 0 while the bucket is still alive.
-        assert 0 <= usage["ttl"] <= 60
-        # get_usage maps Redis TTL -1 (no expiry) and -2 (missing key) to 0,
-        # so the range above alone cannot catch a dropped EXPIREAT: assert on
-        # the raw key TTL instead.
+        # EXPIREAT uses frozen Lua time; Redis TTL still uses its real clock.
+        assert frozen + 60 - after - 1 <= usage["ttl"] <= frozen + 60 - before
+        # Also reject Redis TTL -1 (no expiry) and -2 (missing key) directly.
         assert (
             await raw_key_ttl(
                 limiter.backend, f"{limiter.config.key_prefix}:{_url_encode_key_component(key)}:*"
@@ -442,9 +449,9 @@ class TestAlgorithmAwareGetUsage:
         assert usage["remaining"] >= 68  # Started with 100, used 30, some refill
         assert usage["remaining"] <= 72
 
-    async def test_get_usage_sliding_window(self, clean_limiter):
+    async def test_get_usage_sliding_window(self, frozen_limiter):
         """Test get_usage with sliding_window algorithm."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"usage-sw-{uuid4().hex}"
         rate = "100/minute"
 
@@ -464,9 +471,9 @@ class TestAlgorithmAwareGetUsage:
 class TestAlgorithmAwareReset:
     """Tests for algorithm-aware reset() (NEW-C12 fix)."""
 
-    async def test_reset_fixed_window(self, clean_limiter):
+    async def test_reset_fixed_window(self, frozen_limiter):
         """Test reset for fixed_window algorithm."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"reset-fw-{uuid4().hex}"
         rate = "5/minute"
 
@@ -486,9 +493,9 @@ class TestAlgorithmAwareReset:
         result = await limiter.check(key=key, rate=rate, algorithm="fixed_window")
         assert result is True
 
-    async def test_reset_token_bucket(self, clean_limiter):
+    async def test_reset_token_bucket(self, frozen_limiter):
         """Test reset for token_bucket algorithm."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"reset-tb-{uuid4().hex}"
         rate = "5/minute"
 
@@ -508,9 +515,9 @@ class TestAlgorithmAwareReset:
         result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
         assert result is True
 
-    async def test_reset_sliding_window(self, clean_limiter):
+    async def test_reset_sliding_window(self, frozen_limiter):
         """Test reset for sliding_window algorithm."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"reset-sw-{uuid4().hex}"
         rate = "5/minute"
 
@@ -595,9 +602,9 @@ class TestContextManager:
 class TestRetryAfterAccuracy:
     """Tests for retry_after accuracy."""
 
-    async def test_retry_after_fixed_window(self, clean_limiter):
+    async def test_retry_after_fixed_window(self, frozen_limiter, redis_client):
         """Test that retry_after is accurate for fixed window."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"retry-fw-{uuid4().hex}"
         rate = "5/second"
 
@@ -606,13 +613,15 @@ class TestRetryAfterAccuracy:
             await limiter.check(key=key, rate=rate)
 
         # Get retry_after
-        try:
+        before, _ = await redis_client.time()
+        with pytest.raises(RateLimitExceeded) as exc_info:
             await limiter.check(key=key, rate=rate)
-        except RateLimitExceeded as e:
-            retry_after = e.retry_after
+        after, _ = await redis_client.time()
+        retry_after = exc_info.value.retry_after
 
-        # retry_after should be <= window size (1 second)
-        assert retry_after <= 1
+        # Compare the one-second virtual deadline with Redis's physical clock.
+        frozen, _ = await limiter.backend.get_redis_time()
+        assert frozen + 1 - after <= retry_after <= frozen + 1 - before
         assert retry_after >= 0
 
     async def test_retry_after_token_bucket(self, clean_limiter):

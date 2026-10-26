@@ -27,9 +27,9 @@ class TestFixedWindow:
         assert await clean_limiter.check(key=f"lua-time-{uuid4().hex}", rate="1/minute")
 
     @pytest.mark.asyncio
-    async def test_basic_rate_limiting(self, clean_limiter):
+    async def test_basic_rate_limiting(self, frozen_limiter, redis_client):
         """Test that basic rate limiting allows and denies correctly."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "test-user"
         rate = "5/minute"
 
@@ -39,21 +39,24 @@ class TestFixedWindow:
             assert result is True, f"Request {i + 1} should be allowed"
 
         # 6th request should be denied
+        before, _ = await redis_client.time()
         with pytest.raises(RateLimitExceeded) as exc_info:
             await limiter.check(key=key, rate=rate)
+        after, _ = await redis_client.time()
 
         assert exc_info.value.retry_after > 0
-        assert exc_info.value.retry_after <= 60
+        # Frozen Lua time puts EXPIREAT in the future, but PTTL is still real.
+        # Check the exact physical expiry rather than allowing an arbitrary TTL.
+        frozen, _ = await limiter.backend.get_redis_time()
+        assert frozen + 60 - after <= exc_info.value.retry_after <= frozen + 60 - before
         assert exc_info.value.remaining == 0
         assert exc_info.value.limit == rate
 
     @pytest.mark.asyncio
-    async def test_burst_behavior(self, clean_limiter):
+    async def test_burst_behavior(self, frozen_limiter):
         """Test handling of burst requests."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"burst-test-{uuid4().hex}"
-        # Hour window: a 1-second window can expire mid-burst on slow CI
-        # runners and over-allow; an hour cannot.
         rate = "50/hour"
 
         # Send 100 requests concurrently
@@ -97,9 +100,9 @@ class TestFixedWindow:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_multi_tenant_isolation(self, clean_limiter):
+    async def test_multi_tenant_isolation(self, frozen_limiter):
         """Test that different tenants have isolated rate limits."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
 
         # Tenant A uses their limit
         for _ in range(5):
@@ -144,9 +147,9 @@ class TestFixedWindow:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_concurrent_requests_same_key(self, clean_limiter):
+    async def test_concurrent_requests_same_key(self, frozen_limiter):
         """Test race conditions with concurrent requests to same key."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "concurrent-test"
         rate = "10/hour"
 
@@ -165,9 +168,9 @@ class TestFixedWindow:
         assert failed == 10
 
     @pytest.mark.asyncio
-    async def test_cost_parameter(self, clean_limiter):
+    async def test_cost_parameter(self, frozen_limiter):
         """Test that cost parameter correctly multiplies request count."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "cost-test"
         rate = "10/minute"
 
@@ -184,7 +187,8 @@ class TestFixedWindow:
             await limiter.check(key=key, rate=rate, cost=1)
 
     @pytest.mark.asyncio
-    async def test_rejected_cost_preserves_capacity(self, clean_limiter):
+    async def test_rejected_cost_preserves_capacity(self, frozen_limiter):
+        clean_limiter = frozen_limiter
         key = f"admission-only-{uuid4().hex}"
         rate = "10/day"
         assert await clean_limiter.check(key=key, rate=rate, cost=8)
@@ -206,7 +210,8 @@ class TestFixedWindow:
         assert result.remaining == 0
 
     @pytest.mark.asyncio
-    async def test_concurrent_rejections_do_not_charge_counter(self, clean_limiter):
+    async def test_concurrent_rejections_do_not_charge_counter(self, frozen_limiter):
+        clean_limiter = frozen_limiter
         key = f"concurrent-admissions-{uuid4().hex}"
         rate = "10/day"
         results = await asyncio.gather(
@@ -220,9 +225,9 @@ class TestFixedWindow:
         assert await clean_limiter.check(key=key, rate=rate, cost=1)
 
     @pytest.mark.asyncio
-    async def test_get_usage_stats(self, clean_limiter):
+    async def test_get_usage_stats(self, frozen_limiter, redis_client):
         """Test getting usage statistics for a key."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "usage-test"
         rate = "100/minute"
 
@@ -230,19 +235,18 @@ class TestFixedWindow:
         for _ in range(42):
             await limiter.check(key=key, rate=rate)
 
-        # Get usage stats
+        before, _ = await redis_client.time()
         usage = await limiter.get_usage(key=key, rate=rate)
+        after, _ = await redis_client.time()
+        frozen, _ = await limiter.backend.get_redis_time()
 
         assert usage["current"] == 42
         assert usage["limit"] == 100
         assert usage["remaining"] == 58
-        # TTL truncates to whole seconds, so a run landing in the final second
-        # of the window legitimately reports 0 while the bucket is still alive.
-        assert 0 <= usage["ttl"] <= 60
+        # EXPIREAT uses frozen Lua time; Redis TTL still uses its real clock.
+        assert frozen + 60 - after - 1 <= usage["ttl"] <= frozen + 60 - before
 
-        # get_usage maps Redis TTL -1 (no expiry) and -2 (missing key) to 0,
-        # so the range above alone cannot catch a dropped EXPIREAT: assert on
-        # the raw key TTL instead.
+        # Also reject Redis TTL -1 (no expiry) and -2 (missing key) directly.
         assert (
             await raw_key_ttl(
                 limiter.backend, f"{limiter.config.key_prefix}:{_url_encode_key_component(key)}:*"
@@ -251,9 +255,9 @@ class TestFixedWindow:
         )
 
     @pytest.mark.asyncio
-    async def test_reset_functionality(self, clean_limiter):
+    async def test_reset_functionality(self, frozen_limiter):
         """Test manual reset of rate limits."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "reset-test"
         rate = "5/minute"
 
@@ -331,9 +335,9 @@ class TestFixedWindow:
         assert health is False
 
     @pytest.mark.asyncio
-    async def test_different_time_windows(self, clean_limiter):
+    async def test_different_time_windows(self, frozen_limiter):
         """Test that different time windows work correctly."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         base_key = "window"
 
         # These should all be independent
@@ -344,12 +348,8 @@ class TestFixedWindow:
             result = await limiter.check(key=base_key, rate=rate)
             assert result is True
 
-        # Exhaust the second-based limit, aligned to a fresh window boundary
-        # so the fill cannot straddle on slow runners. The earlier loop's
-        # 5/second check lives in the previous window, so base_key starts
-        # at 0 here and the same-key cross-window independence is preserved.
-        await sleep_past_window_boundary(limiter)
-        for _ in range(5):
+        # The earlier loop already consumed one request in this frozen second.
+        for _ in range(4):
             assert await limiter.check(key=base_key, rate="5/second") is True
 
         # Second-based should be exhausted

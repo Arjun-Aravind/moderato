@@ -21,15 +21,14 @@ from moderato import RateLimiter, RateLimitExceeded
 class TestFixedWindowConcurrency:
     """Atomicity tests for fixed window algorithm."""
 
-    async def test_concurrent_requests_exact_limit(self, clean_limiter):
+    async def test_concurrent_requests_exact_limit(self, frozen_limiter):
         """
         Test that concurrent requests enforce exact limit.
 
         With 50 limit and 200 concurrent requests, exactly 50 should be allowed.
         """
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"fw-concurrent-{uuid4().hex}"
-        # Minute window: a 1-second window could expire mid-burst and over-allow
         rate = "50/hour"
 
         async def make_request():
@@ -48,9 +47,9 @@ class TestFixedWindowConcurrency:
         assert allowed == 50, f"Expected exactly 50 allowed, got {allowed}"
         assert denied == 150, f"Expected 150 denied, got {denied}"
 
-    async def test_high_concurrency_500_requests(self, clean_limiter):
+    async def test_high_concurrency_500_requests(self, frozen_limiter):
         """Test with 500 concurrent requests."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"fw-high-concurrent-{uuid4().hex}"
         rate = "100/hour"
 
@@ -66,9 +65,9 @@ class TestFixedWindowConcurrency:
         allowed = sum(1 for r in results if r is True)
         assert allowed == 100, f"Expected exactly 100 allowed, got {allowed}"
 
-    async def test_concurrent_with_cost(self, clean_limiter):
+    async def test_concurrent_with_cost(self, frozen_limiter):
         """Test concurrent requests with varying costs."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"fw-cost-concurrent-{uuid4().hex}"
         rate = "100/hour"
 
@@ -91,11 +90,10 @@ class TestFixedWindowConcurrency:
 class TestTokenBucketConcurrency:
     """Atomicity tests for token bucket algorithm."""
 
-    async def test_concurrent_token_bucket_exact(self, clean_limiter):
+    async def test_concurrent_token_bucket_exact(self, frozen_limiter):
         """Test that token bucket enforces exact capacity under concurrency."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"tb-concurrent-{uuid4().hex}"
-        # Slow refill (minute window) keeps refill during the burst negligible
         rate = "20/hour"
 
         async def make_request():
@@ -154,9 +152,9 @@ class TestTokenBucketConcurrency:
 class TestSlidingWindowConcurrency:
     """Atomicity tests for sliding window algorithm."""
 
-    async def test_concurrent_sliding_window_exact(self, clean_limiter):
+    async def test_concurrent_sliding_window_exact(self, frozen_limiter):
         """Test sliding window atomic enforcement under concurrency."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sw-concurrent-{uuid4().hex}"
         rate = "30/hour"
 
@@ -178,13 +176,13 @@ class TestSlidingWindowConcurrency:
 class TestRaceConditions:
     """Tests specifically designed to trigger race conditions."""
 
-    async def test_rapid_sequential_becomes_concurrent(self, clean_limiter):
+    async def test_rapid_sequential_becomes_concurrent(self, frozen_limiter):
         """
         Test that rapid sequential requests are handled atomically.
 
         Even without explicit concurrency, rapid requests can race.
         """
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"race-rapid-{uuid4().hex}"
         rate = "10/hour"
 
@@ -203,9 +201,9 @@ class TestRaceConditions:
         assert allowed == 10, f"Expected 10 allowed, got {allowed}"
         assert denied == 40
 
-    async def test_check_with_info_atomic(self, clean_limiter):
+    async def test_check_with_info_atomic(self, frozen_limiter):
         """Test that check_with_info is also atomic under concurrency."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"race-info-{uuid4().hex}"
         rate = "25/hour"
 
@@ -359,9 +357,9 @@ class TestMultiKeyIsolation:
 class TestEdgeCaseConcurrency:
     """Edge case concurrency tests."""
 
-    async def test_cost_equals_limit_concurrent(self, clean_limiter):
+    async def test_cost_equals_limit_concurrent(self, frozen_limiter):
         """Test concurrent requests where cost equals limit."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"cost-limit-{uuid4().hex}"
         rate = "10/hour"
 
@@ -379,9 +377,9 @@ class TestEdgeCaseConcurrency:
         # Only 1 should be allowed (cost=10, limit=10)
         assert allowed == 1, f"Expected 1 allowed, got {allowed}"
 
-    async def test_concurrent_reset_and_check(self, clean_limiter):
+    async def test_concurrent_reset_and_check(self, frozen_limiter):
         """Test concurrent reset and check operations."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"reset-check-{uuid4().hex}"
         rate = "5/second"
 
@@ -412,9 +410,9 @@ class TestEdgeCaseConcurrency:
 class TestHighLoadConcurrency:
     """High load concurrency tests (may be slow)."""
 
-    async def test_1000_concurrent_requests(self, clean_limiter):
+    async def test_1000_concurrent_requests(self, frozen_limiter):
         """Test with 1000 concurrent requests."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"high-load-{uuid4().hex}"
         rate = "100/hour"
 
@@ -430,12 +428,10 @@ class TestHighLoadConcurrency:
         allowed = sum(1 for r in results if r is True)
         assert allowed == 100, f"Expected 100 allowed, got {allowed}"
 
-    async def test_sustained_high_load(self, clean_limiter):
+    async def test_sustained_high_load(self, frozen_limiter):
         """Test repeated high-load bursts against the same limit."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sustained-{uuid4().hex}"
-        # An hour window cannot be crossed within the test runtime, so the
-        # allowed total is deterministic regardless of runner speed.
         rate = "50/hour"
 
         total_allowed = 0

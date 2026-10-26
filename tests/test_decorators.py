@@ -83,7 +83,9 @@ async def test_starlette_routes_with_shared_handler_keep_separate_templates(froz
 
 
 @pytest.mark.asyncio
-async def test_example_user_usage_reads_admission_scope(redis_url, monkeypatch):
+async def test_example_user_usage_reads_admission_scope(
+    redis_url, monkeypatch, freeze_limiter_time
+):
     from uuid import uuid4
 
     import httpx
@@ -94,6 +96,7 @@ async def test_example_user_usage_reads_admission_scope(redis_url, monkeypatch):
     monkeypatch.setattr(limiter.config, "redis_url", redis_url)
     monkeypatch.setattr(limiter.config, "key_prefix", f"test:example:{uuid4().hex}")
     await limiter.connect()
+    await freeze_limiter_time(limiter)
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=fastapi_app.app), base_url="http://test"
@@ -109,6 +112,11 @@ async def test_example_user_usage_reads_admission_scope(redis_url, monkeypatch):
 
 class TestDecorators:
     """Test suite for decorator functionality."""
+
+    @pytest.fixture(autouse=True)
+    async def quota_clock(self, clean_limiter, freeze_limiter_time):
+        # These tests exercise identity, scope and cost, not elapsed time.
+        await freeze_limiter_time(clean_limiter)
 
     @pytest.mark.asyncio
     async def test_basic_decorator(self, clean_limiter, mock_request):
@@ -263,8 +271,6 @@ class TestDecorators:
     @pytest.mark.asyncio
     async def test_multiple_decorators(self, clean_limiter, mock_request):
         """Test multiple rate limit decorators on same function."""
-        from tests.conftest import sleep_past_window_boundary
-
         limiter = clean_limiter
         request = mock_request()
 
@@ -275,23 +281,12 @@ class TestDecorators:
         async def multi_limited(request):
             return {"status": "ok"}
 
-        # Start at a fresh 1-second window so the 5/second bucket is empty.
-        await sleep_past_window_boundary(limiter)
-
         # Should be limited by the stricter limit (5/second)
         for _ in range(5):
             await multi_limited(request)
 
-        # If the probe straddles a window boundary, the bucket resets and the
-        # call succeeds; keep probing so a boundary straddle cannot flake this.
-        exceeded = False
-        for _ in range(15):
-            try:
-                await multi_limited(request)
-            except RateLimitExceeded:
-                exceeded = True
-                break
-        assert exceeded, "stacked decorators must enforce the stricter 5/second limit"
+        with pytest.raises(RateLimitExceeded):
+            await multi_limited(request)
 
     @pytest.mark.asyncio
     async def test_decorator_with_path_params(self, clean_limiter):

@@ -359,10 +359,11 @@ class TestMiddlewareProxySecurity:
         "header", [b"x-forwarded-for", b"X-Forwarded-For", b"x-real-ip", b"X-Real-IP"]
     )
     @pytest.mark.parametrize("trust", [False, True])
-    async def test_raw_scope_quota_identity(self, redis_url, header, trust):
+    async def test_raw_scope_quota_identity(self, redis_url, freeze_limiter_time, header, trust):
         """Trusted casing shares origin quota; spoofing cannot evade peer quota."""
         limiter = RateLimiter(redis_url=redis_url, key_prefix=f"scope-{uuid4().hex}")
         await limiter.connect()
+        await freeze_limiter_time(limiter)
         try:
 
             async def app(scope, receive, send):
@@ -412,9 +413,10 @@ class TestMiddlewareProxySecurity:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("trust", [False, True])
-    async def test_missing_client_shares_unknown_quota(self, redis_url, trust):
+    async def test_missing_client_shares_unknown_quota(self, redis_url, freeze_limiter_time, trust):
         limiter = RateLimiter(redis_url=redis_url, key_prefix=f"unknown-{uuid4().hex}")
         await limiter.connect()
+        await freeze_limiter_time(limiter)
         try:
 
             async def app(scope, receive, send):
@@ -705,10 +707,11 @@ class TestPolicyIsolation:
     """
 
     @pytest.mark.asyncio
-    async def test_different_policies_do_not_share_state(self, redis_url):
+    async def test_different_policies_do_not_share_state(self, redis_url, freeze_limiter_time):
         """A exhausted 5/minute policy must not corrupt a 100/minute policy."""
         limiter = RateLimiter(redis_url=redis_url, key_prefix="policy-isolation")
         await limiter.connect()
+        await freeze_limiter_time(limiter)
         try:
             key = f"iso-{uuid4().hex}"
 
@@ -843,7 +846,8 @@ class TestPolicyIsolation:
         )
 
     @pytest.mark.asyncio
-    async def test_long_identifier_can_be_reset(self, clean_limiter):
+    async def test_long_identifier_can_be_reset(self, frozen_limiter):
+        clean_limiter = frozen_limiter
         key = "user-" + "x" * 300
         await clean_limiter.check(key=key, rate="5/minute")
         assert (await clean_limiter.get_usage(key=key, rate="5/minute"))["current"] == 1

@@ -50,10 +50,42 @@ Violations should be reported to the project maintainers. All complaints will be
 
 Before contributing, ensure you have:
 
-- **Python 3.9+** installed
+- **Python 3.10–3.14** installed for library development/testing
+- **Python 3.12** available as `python3.12` to run the configured Black pre-commit
+  hook (`.pre-commit-config.yaml` pins its interpreter). This tooling requirement
+  does not narrow the library's supported Python range.
 - **Redis** server (for testing)
 - **Git** for version control
 - **Docker** (optional, for containerized Redis)
+
+Follow the [Python support/deprecation policy](README.md#python-support-policy).
+Interpreter changes require the full supported-minor CI matrix, locked and
+minimum-dependency checks, installed wheel/sdist and extras checks, and the
+[consumer qualification matrix](tests/consumer/README.md). Keep historical
+benchmark evidence unchanged; its Python 3.12 measurements are not qualification
+of another interpreter. Do not widen metadata before qualification passes.
+
+### Python 3.14 warning inventory
+
+The locked Python 3.14 qualification suite passes but is not warning-free.
+Warnings come from both repository test infrastructure and dependencies:
+
+| Source | Warning |
+| --- | --- |
+| `tests/conftest.py:30` | The session event-loop fixture calls deprecated `asyncio.get_event_loop_policy()`. |
+| pytest-asyncio 0.21.2, `plugin.py:155` | Deprecated `asyncio.iscoroutinefunction()`. |
+| pytest-asyncio 0.21.2, `plugin.py:395,441,462` | Deprecated `asyncio.get_event_loop_policy()`. |
+| Starlette 0.27.0, `_utils.py:17,18` | Deprecated `asyncio.iscoroutinefunction()`. |
+| FastAPI 0.104.1, `routing.py:211` | Deprecated `asyncio.iscoroutinefunction()`. |
+| AnyIO 3.7.1, `from_thread.py:118` | Import-time `SyntaxWarning` for `return` in a `finally` block; visible on initial compilation, not necessarily cached imports. |
+
+The recorded locked run reported 11,947 deprecation warnings: 11,237 from
+pytest-asyncio's coroutine check, 581 from Starlette, 125 from FastAPI, three
+from pytest-asyncio's event-loop-policy calls, and one from our fixture.
+Counts depend on the test/dependency versions and warning filters; they are not
+a compatibility guarantee. The deprecated asyncio APIs are scheduled for removal
+in Python 3.16. Future tooling/fixture upgrades must address these warnings;
+this support-policy change neither suppresses them nor qualifies Python 3.15+.
 
 ### First Contribution
 
@@ -736,6 +768,13 @@ Example: 1.2.3
 ```
 
 ### Release Checklist
+
+**Release gate:** reconcile `SECURITY.md`, the intended `CHANGELOG.md` release
+section, and package/runtime/Commitizen versions before tagging or publishing.
+The current 0.5.0 metadata and dated changelog section can pass preflight even
+though `SECURITY.md` describes 0.5.0 as development. Preflight success alone does
+not resolve that discrepancy or authorize a release. The Python support-policy
+update remains under Unreleased; its release version is not yet selected.
 
 1. **Update Version**: In `pyproject.toml`
 2. **Update CHANGELOG**: Document all changes

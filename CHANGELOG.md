@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- **BREAKING:** Python 3.9 support is removed; CPython 3.10–3.14 is the supported range, with no Python 3.15 claim. Retain 3.10 for migration compatibility, add 3.14 qualification, pin Actions runners to Ubuntu 24.04, and document the support/deprecation policy. This explicitly bypasses the normal deprecation lead time for already-EOL 3.9, which is unavailable on newer runners.
+
 ### Fixed
 
 - Metrics-enabled limiters now populate Redis command counters for connection/health `PING`, script registration, and Lua decision dispatch. Successful Lua replies are counted separately for cached `EVALSHA` and fallback `EVAL`; a `NOSCRIPT` miss is an errored command attempt, not a successful script execution. Redis connection exceptions from these commands are recorded without changing retry or admission behavior.

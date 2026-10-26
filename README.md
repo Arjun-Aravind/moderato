@@ -2,7 +2,7 @@
 
 *In musical notation, **moderato** means "at a moderate pace." Moderato enforces your API's tempo.*
 
-[![Python Version](https://img.shields.io/badge/python-3.9--3.13-blue)](https://www.python.org)
+[![Python Version](https://img.shields.io/badge/python-3.10--3.14-blue)](https://www.python.org)
 [![PyPI](https://img.shields.io/pypi/v/moderato)](https://pypi.org/project/moderato/)
 [![CI](https://github.com/Arjun-Aravind/moderato/actions/workflows/ci.yml/badge.svg)](https://github.com/Arjun-Aravind/moderato/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -709,11 +709,46 @@ and the atomic Lua scripts in `moderato/scripts/` — both are heavily tested
 
 ---
 
+## Python support policy
+
+The development checkout targets standard CPython **3.10–3.14** for the next release
+(`>=3.10,<3.15`). Python 3.9 support is removed; Python 3.15, prereleases,
+free-threaded builds, and alternative interpreters are not qualified.
+Published older releases retain their original metadata.
+
+We add a Python minor only after its stable release passes the source suite,
+installed wheel/sdist and extras checks, and real-Redis consumer qualification.
+CI pins Ubuntu 24.04 and tests every supported minor with locked dependencies
+and the redis-py 5.0.0 floor. The consumer matrix also tests a minimum compatible
+integration set on Python 3.10 and resolvable current dependencies on each minor.
+Support does not promise every historical dependency version on every Python:
+use dependencies with wheels and upstream support for your interpreter.
+
+We review Python support at each feature release using upstream lifecycle,
+dependency availability, and runner availability. Removal is a documented
+breaking change in a feature release while Moderato is 0.x (a major release
+after 1.0), never silently in a patch. Normally we announce deprecation at
+least one feature release before removal; EOL or unavailable toolchains may
+require an explicitly documented exception. Python 3.9 is such an exception:
+it reached [upstream EOL](https://devguide.python.org/versions/) in October 2025
+and has no builds on the newer Ubuntu 26.04 Actions runners.
+
+Python 3.10 remains supported for migration compatibility, even though its
+upstream security lifecycle ended in October 2026. This is library compatibility,
+not a promise of interpreter security fixes; prefer a security-maintained Python
+for production. Current redis-py, Pydantic, FastAPI, AnyIO, and limits releases
+require 3.10+, with some frameworks requiring newer versions. That ecosystem
+trend informs review, but does not by itself remove Moderato's 3.10 support.
+See [consumer qualification](tests/consumer/README.md) for reproducible checks
+and their limits. Docker demos, development setup, and historical benchmarks
+remain on Python 3.12; benchmark results are not portable performance claims.
+
 ## Development
 
 ### Prerequisites
 
-- Python 3.9–3.13
+- Python 3.10–3.14 for the library; Python 3.12 is required for the configured
+  Black pre-commit hook (see [contributor prerequisites](CONTRIBUTING.md#prerequisites))
 - Redis 7.0+
 - Poetry
 

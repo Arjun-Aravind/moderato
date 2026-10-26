@@ -771,10 +771,14 @@ Example: 1.2.3
 
 **Release gate:** reconcile `SECURITY.md`, the intended `CHANGELOG.md` release
 section, and package/runtime/Commitizen versions before tagging or publishing.
-The current 0.5.0 metadata and dated changelog section can pass preflight even
-though `SECURITY.md` describes 0.5.0 as development. Preflight success alone does
-not resolve that discrepancy or authorize a release. The Python support-policy
-update remains under Unreleased; its release version is not yet selected.
+The 0.6.0 candidate has aligned metadata and a dated changelog, but remains
+unpublished. Preflight verifies versions and release notes, not qualification,
+publication, or authorization. Preserve the exact candidate's distribution
+hashes and test evidence. Before an authorized publication, update README and
+SECURITY publication status and requalify the resulting artifacts. Pushing a
+`v*` tag triggers `.github/workflows/release.yml`, which creates a GitHub release
+and publishes to PyPI; do not push a tag merely to test preflight. Its Python
+3.12 build interpreter does not replace the Python 3.10–3.14 qualification gate.
 
 1. **Update Version**: In `pyproject.toml`
 2. **Update CHANGELOG**: Document all changes

@@ -11,9 +11,16 @@
 
 A Redis-backed rate limiting library for async Python applications.
 
-**Version 0.5.0:** review the [changelog and upgrade notes](CHANGELOG.md#v050-2026-10-13)
-before upgrading, especially the token-bucket key migration and default mounted-route
-scope changes, which start fresh quotas.
+**Version 0.6.0 (release preparation; not yet published):** review the
+[0.6.0 release notes](CHANGELOG.md#v060-2026-10-26) before upgrading. Python 3.9
+is no longer supported; use CPython 3.10–3.14, preferably a security-maintained
+minor. Framework extras reject Starlette 0.46.0/0.46.1; regenerate dependency
+locks rather than forcing these versions. Redis command/script telemetry is now
+populated automatically when metrics are enabled. No quota/key migration is
+needed from 0.5.0. When upgrading from 0.4.x or earlier, also follow the
+[0.5.0 upgrade notes](CHANGELOG.md#v050-2026-10-13): token-bucket keys and default
+mounted-route scopes change, starting fresh quotas. The latest published release
+remains 0.5.0 until 0.6.0 is published.
 
 [Features](#features) | [Quick Start](#quick-start) | [Algorithms](#algorithms) | [Documentation](#documentation) | [Examples](#examples)
 
@@ -351,8 +358,8 @@ limiter = RateLimiter(
 | `moderato_redis_script_executions_total{script_name,execution_type}` | Lua calls with successful Redis replies, including quota denials, split by `evalsha`/`eval` |
 | `moderato_redis_connection_errors_total` | Redis connection exceptions from those instrumented commands |
 
-The last three Redis-specific families are wired automatically in the unreleased
-follow-up to 0.5.0; published 0.5.0 exposes them but does not update them automatically.
+The last three Redis-specific families are wired automatically starting in 0.6.0;
+0.5.0 exposes them but does not update them automatically.
 Command counters measure client calls, not Redis's internal Lua commands or wire-level
 retries. A `NOSCRIPT` miss counts as an `EVALSHA` error followed by an `EVAL` call;
 only the successful fallback counts as a script execution. Other errors are not
@@ -711,7 +718,7 @@ and the atomic Lua scripts in `moderato/scripts/` — both are heavily tested
 
 ## Python support policy
 
-The development checkout targets standard CPython **3.10–3.14** for the next release
+Moderato 0.6.0 targets standard CPython **3.10–3.14**
 (`>=3.10,<3.15`). Python 3.9 support is removed; Python 3.15, prereleases,
 free-threaded builds, and alternative interpreters are not qualified.
 Published older releases retain their original metadata.

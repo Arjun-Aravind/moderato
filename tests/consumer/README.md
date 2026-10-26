@@ -52,7 +52,7 @@ HTTPX. This is a test-client dependency incompatibility, not a skipped assertion
 
 For exactly repeatable dependency versions, reinstall the versions from a run's
 `environment.dependencies`, rather than resolving the latest versions again.
-The package version alone is insufficient: unreleased builds can both say 0.5.0.
+The package version alone is insufficient: candidate builds can both say 0.6.0.
 The probe and server automatically hash the local installed wheel and verify its
 runtime files against site-packages. Keep the installation wheel available.
 The probe requires `QUALIFICATION_PROFILE`, `EXPECTED_APP_PREFIX` and
@@ -65,7 +65,7 @@ automatically. `provenance.py` must accompany the copied app and probe.
 ```sh
 uv venv /tmp/moderato-consumer --python 3.12
 uv pip install --python /tmp/moderato-consumer/bin/python \
-  "moderato[all] @ file://$PWD/dist/moderato-0.5.0-py3-none-any.whl" httpx uvicorn
+  "moderato[all] @ file://$PWD/dist/moderato-0.6.0-py3-none-any.whl" httpx uvicorn
 mkdir -p /tmp/moderato-consumer-app
 cp tests/consumer/{app,probe,provenance}.py /tmp/moderato-consumer-app/
 prefix="qualification-$(cat /proc/sys/kernel/random/uuid)"

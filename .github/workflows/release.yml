@@ -34,6 +34,7 @@ jobs:
           import os
           import re
           import tomllib
+          from datetime import date
           from pathlib import Path
 
           config = tomllib.loads(Path("pyproject.toml").read_text())["tool"]
@@ -49,11 +50,15 @@ jobs:
           heading = re.compile(r"^## (?:\[" + re.escape(version) + r"\]|v?"
                                + re.escape(version) + r")(?=\s|$).*$", re.MULTILINE)
           changelog = Path("CHANGELOG.md").read_text()
-          match = heading.search(changelog)
-          assert match, f"Missing changelog section for {version}"
+          matches = list(heading.finditer(changelog))
+          assert len(matches) == 1, f"Expected one changelog section for {version}"
+          match = matches[0]
           assert "unreleased" not in match.group().lower(), "Finalize changelog before release"
+          dated = re.search(r"\b\d{4}-\d{2}-\d{2}\b", match.group())
+          assert dated, "Date the changelog before release"
+          date.fromisoformat(dated.group())
           notes = re.split(r"^## ", changelog[match.end():], maxsplit=1, flags=re.MULTILINE)[0].strip()
-          assert notes, "Empty changelog section"
+          assert re.search(r"^\s*[-*] \S", notes, re.MULTILINE), "Empty changelog section"
           Path("release_notes.md").write_text(notes + "\n")
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"version={version}\n")
@@ -65,7 +70,9 @@ jobs:
           version: 1.8.3
 
       - name: Build package
-        run: poetry build
+        run: |
+          poetry check --lock
+          poetry build
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1

@@ -7,15 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v0.6.0 (2026-10-26)
+
 ### Changed
 
 - **BREAKING:** Python 3.9 support is removed; CPython 3.10–3.14 is the supported range, with no Python 3.15 claim. Retain 3.10 for migration compatibility, add 3.14 qualification, pin Actions runners to Ubuntu 24.04, and document the support/deprecation policy. This explicitly bypasses the normal deprecation lead time for already-EOL 3.9, which is unavailable on newer runners.
+- Python 3.10 compatibility does not extend its upstream security lifecycle, which ended in October 2026. Prefer a security-maintained interpreter for production. CI now covers all five supported minors with locked dependencies, the redis-py 5.0.0 floor, and isolated wheel/sdist installs; the development lockfile and Python 3.12 tooling configuration are refreshed. Python 3.14 dependency/test deprecation warnings remain documented in CONTRIBUTING.md.
+- Package, runtime, and Commitizen versions are aligned at 0.6.0. This release does not change Redis key schemas, quota accounting, or failure policy relative to 0.5.0. Upgrades from older versions must also follow the 0.5.0 migration notes below.
+
+### Added
+
+- Installed-consumer qualification harness for real Redis and TCP HTTP behavior, independently selectable extras, telemetry, faults, transport options, multiworker collection, bounded soak, and alternating old/new version compatibility. Its matrix covers current resolvable dependencies on Python 3.10–3.14, a minimum compatible integration set on 3.10, and Starlette 0.46.2 on 3.12. Results include installed-wheel provenance and dependency versions; sampled profiles are not a guarantee for every dependency combination or deployment.
 
 ### Fixed
 
 - Metrics-enabled limiters now populate Redis command counters for connection/health `PING`, script registration, and Lua decision dispatch. Successful Lua replies are counted separately for cached `EVALSHA` and fallback `EVAL`; a `NOSCRIPT` miss is an errored command attempt, not a successful script execution. Redis connection exceptions from these commands are recorded without changing retry or admission behavior.
 - Documented the exact automatic metrics contract, process-local worker collection, and manually populated usage/connection gauges. Per-client usage labels remain opt-in to avoid unbounded automatic series creation; an uninstrumented zero gauge is not a measured pool or quota state.
-- Documented version-dependent partial-stream HTTP 200 behavior inherited from Starlette `BaseHTTPMiddleware`, with completion-marker or validated-length/checksum guidance. No middleware rewrite or dependency pin was introduced.
+- Framework extras exclude Starlette 0.46.0 and 0.46.1 because their `BaseHTTPMiddleware` regression re-raises handled downstream exceptions, causing server errors and broken HTTP keep-alive connections after 429/422/503 responses. Starlette 0.46.2 fixes that regression; no exact framework version is pinned.
+- Documented version-dependent partial-stream HTTP 200 behavior inherited from Starlette `BaseHTTPMiddleware`, with completion-marker or validated-length/checksum guidance. The dependency exclusion does not fix streaming failures, and no middleware rewrite was introduced.
+- Key-collision and negative-cost regressions now freeze Redis script time through the existing test fixture so wall-clock window rollover cannot invalidate exhausted-quota assertions. Production time handling is unchanged.
 
 ## v0.5.0 (2026-10-13)
 

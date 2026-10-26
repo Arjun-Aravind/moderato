@@ -23,14 +23,15 @@ for incompatible in 0.46.0 0.46.1; do
         failed=1
     fi
 done
-for profile in ${PROFILES:-py39 py310 py311 py312 py313 minimum transitional}; do
+for profile in ${PROFILES:-py310 py311 py312 py313 py314 minimum transitional}; do
     version=${profile#py}
     case "$profile" in
-        py39|minimum) version=3.9;;
-        py310) version=3.10;;
+        py310|minimum) version=3.10;;
         py311) version=3.11;;
         py312|transitional) version=3.12;;
         py313) version=3.13;;
+        py314) version=3.14;;
+        *) echo "Unknown profile: $profile" >&2; exit 2;;
     esac
     uv venv --python "$version" "$work/$profile" > "$out/$profile-install.log" 2>&1
     python="$work/$profile/bin/python"

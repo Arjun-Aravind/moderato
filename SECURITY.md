@@ -9,6 +9,14 @@
 
 Version 0.5.0 is in development, not a published supported release yet.
 
+The development checkout targets CPython 3.10–3.14 and removes Python 3.9
+for the next release; published releases retain their original Python metadata.
+See the [Python support/deprecation policy](README.md#python-support-policy).
+Library compatibility does not extend CPython's security lifecycle: Python 3.10
+is retained for migration compatibility after its October 2026 upstream EOL.
+Use an upstream security-maintained interpreter for production. This does not
+change the published 0.4.x security-support status above.
+
 ## Reporting a vulnerability
 
 Please do **not** report security vulnerabilities through public GitHub issues.

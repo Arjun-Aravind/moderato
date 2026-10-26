@@ -1,4 +1,4 @@
-"""Verify built distributions on Python 3.12, not the source checkout."""
+"""Verify built distributions on the invoking supported Python, not the checkout."""
 
 import asyncio
 import json
@@ -12,8 +12,6 @@ import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 from uuid import uuid4
-
-import tomllib
 
 
 async def installed(version, extras):
@@ -116,6 +114,11 @@ async def installed(version, extras):
 
 
 def verify():
+    if sys.version_info >= (3, 11):
+        import tomllib
+    else:
+        import tomli as tomllib
+
     root = Path(__file__).resolve().parents[1]
     config = tomllib.loads((root / "pyproject.toml").read_text())["tool"]
     version = config["poetry"]["version"]
@@ -142,7 +145,14 @@ def verify():
                 assert {prefix + name for name in required} <= set(archive.getnames())
                 assert prefix + "LICENSE" in archive.getnames()
                 metadata = archive.extractfile(prefix + "PKG-INFO").read()
-        assert BytesParser().parsebytes(metadata)["Version"] == version
+        parsed = BytesParser().parsebytes(metadata)
+        assert parsed["Version"] == version
+        assert parsed["Requires-Python"] == ">=3.10,<3.15"
+        classifiers = parsed.get_all("Classifier")
+        assert "Programming Language :: Python :: 3.9" not in classifiers
+        assert "Programming Language :: Python :: 3.15" not in classifiers
+        for minor in range(10, 15):
+            assert f"Programming Language :: Python :: 3.{minor}" in classifiers
         for extras in (False, True):
             with tempfile.TemporaryDirectory(prefix="moderato-package-") as directory:
                 env = Path(directory) / "venv"

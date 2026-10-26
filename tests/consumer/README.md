@@ -23,16 +23,16 @@ safe authentication for a public service.
 
 Prerequisites: `uv`, `poetry`, `curl`, Amp's service supervisor, and disposable
 Redis listening on 127.0.0.1:6379. Python interpreters can be installed with
-`uv python install 3.9 3.10 3.11 3.12 3.13`.
+`uv python install 3.10 3.11 3.12 3.13 3.14`.
 
 ```sh
 poetry build
 bash tests/consumer/matrix.sh "$PWD/.amp/in/artifacts/qualification/rerun"
 ```
 
-The matrix covers Python 3.9–3.13 with resolvable current dependencies, a minimum
-compatible integration set, and Starlette 0.46.2. It installs the wheel into
-seven fresh environments, verifies dependency consistency, runs a real Uvicorn
+The matrix covers Python 3.10–3.14 with resolvable current dependencies, a minimum
+compatible integration set on Python 3.10, and Starlette 0.46.2 on Python 3.12.
+It installs the wheel into seven fresh environments, verifies dependency consistency, runs a real Uvicorn
 server, retains JSON results, import paths, exact dependency versions, Lua
 hashes, HTTP/Prometheus observations, and server logs. Environments are retained
 in `/tmp` and their path is recorded. Use `PROFILES='minimum transitional'` for
@@ -40,6 +40,15 @@ a subset. `STARLETTE_VERSION` deliberately overrides the transitional version
 for regression reproduction; 0.46.0/0.46.1 must fail resolution with the fixed
 distribution. `matrix.sh` returns nonzero on installation, startup, or probe
 failure. Its sampled version combinations are not a Cartesian-product guarantee.
+
+The minimum integration profile uses Pydantic 2.0.2 (FastAPI 0.100.0 excludes
+2.0.0/2.0.1) and AnyIO 3.6.2; it is not a claim that old native dependencies build
+on Python 3.14. The source CI separately checks the redis-py 5.0.0 floor on all
+supported interpreters. See the [support policy](../../README.md#python-support-policy).
+When running the source suite with this minimum integration set, install the
+repository's HTTPX 0.25.2 pin: Starlette 0.27's `TestClient` is incompatible with
+HTTPX 0.28+. The live TCP consumer does not use `TestClient` and can use current
+HTTPX. This is a test-client dependency incompatibility, not a skipped assertion.
 
 For exactly repeatable dependency versions, reinstall the versions from a run's
 `environment.dependencies`, rather than resolving the latest versions again.

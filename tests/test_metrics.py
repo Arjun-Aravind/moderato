@@ -288,7 +288,7 @@ async def test_stacked_bypass_omits_quota_headers(frozen_limiter, bypass_first, 
 
 
 @pytest.mark.asyncio
-async def test_limiter_records_checks_and_backend_operations(redis_url):
+async def test_limiter_records_checks_and_backend_operations(redis_url, freeze_limiter_time):
     limiter = RateLimiter(
         redis_url=redis_url,
         key_prefix=f"metrics:{uuid.uuid4().hex}",
@@ -307,6 +307,8 @@ async def test_limiter_records_checks_and_backend_operations(redis_url):
     )
 
     try:
+        await limiter.connect()
+        await freeze_limiter_time(limiter)
         await limiter.check("client", "1/hour")
         with pytest.raises(RateLimitExceeded):
             await limiter.check("client", "1/hour")

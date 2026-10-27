@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "moderato"
-version = "0.6.0"
+version = "0.6.1"
 description = "Async Redis-backed rate limiting library for Python"
 authors = ["Arjun Aravind <arjunaravind748@gmail.com>"]
 readme = "README.md"
@@ -135,7 +135,7 @@ exclude_lines = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.6.0"
+version = "0.6.1"
 tag_format = "v$version"
 version_files = [
     "moderato/__init__.py:__version__",

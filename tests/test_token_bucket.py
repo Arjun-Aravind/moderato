@@ -220,9 +220,9 @@ class TestTokenBucket:
         assert not result.allowed
         assert result.reset_at >= math.ceil(before_ms / 1000 + result.retry_after)
 
-    async def test_basic_token_bucket(self, clean_limiter):
+    async def test_basic_token_bucket(self, frozen_limiter):
         """Test basic token bucket rate limiting."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "token-bucket-test"
         rate = "10/second"
 
@@ -235,11 +235,9 @@ class TestTokenBucket:
         results = await asyncio.gather(*tasks)
         assert all(r is True for r in results)
 
-        # 11th request should be rate limited. cost=10 (full capacity) makes
-        # the denial timing-proof: a slow runner's drain can leak a token or
-        # two back via refill, but a full bucket takes a full second.
+        # With no elapsed time, even a single additional token must be denied.
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=1)
 
     async def test_token_refill(self, clean_limiter):
         """Test that tokens refill over time."""
@@ -304,11 +302,10 @@ class TestTokenBucket:
             result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
             assert result is True
 
-    async def test_cost_parameter_token_bucket(self, clean_limiter):
+    async def test_cost_parameter_token_bucket(self, frozen_limiter):
         """Test that cost parameter works with token bucket."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "cost-test-tb"
-        # Minute rate: keeps refill negligible so the final denial is robust
         rate = "10/minute"
 
         # Request with cost=5 should consume 5 tokens
@@ -383,9 +380,9 @@ class TestTokenBucket:
         assert success_tb >= 8  # Token bucket refilled
         assert success_fw >= 8  # Fixed window reset
 
-    async def test_concurrent_token_bucket_requests(self, clean_limiter):
+    async def test_concurrent_token_bucket_requests(self, frozen_limiter):
         """Test token bucket with concurrent requests."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "concurrent-tb-test"
         rate = "20/second"
 
@@ -401,7 +398,7 @@ class TestTokenBucket:
 
         # Exactly 20 should succeed (bucket capacity)
         successful = sum(1 for r in results if r is True)
-        assert 18 <= successful <= 20  # Allow small variance for timing
+        assert successful == 20
 
     async def test_multiple_time_windows(self, clean_limiter):
         """Test token bucket with different time windows."""
@@ -421,10 +418,9 @@ class TestTokenBucket:
             result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
             assert result is True
 
-    async def test_tenant_isolation_token_bucket(self, clean_limiter):
+    async def test_tenant_isolation_token_bucket(self, frozen_limiter):
         """Test that different tenants have isolated token buckets."""
-        limiter = clean_limiter
-        # Minute rate: keeps refill negligible so the denial is robust
+        limiter = frozen_limiter
         rate = "5/minute"
 
         # Tenant 1 uses up their tokens (concurrently, faster than the refill)
@@ -447,9 +443,9 @@ class TestTokenBucket:
             )
             assert result is True
 
-    async def test_token_bucket_reset(self, clean_limiter):
+    async def test_token_bucket_reset(self, frozen_limiter):
         """Test resetting a token bucket."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "reset-test-tb"
         rate = "10/second"
 
@@ -457,10 +453,9 @@ class TestTokenBucket:
         tasks = [limiter.check(key=key, rate=rate, algorithm="token_bucket") for _ in range(10)]
         await asyncio.gather(*tasks)
 
-        # Should be rate limited (cost=10: drain refill can leak a token or
-        # two on slow runners, but not a full bucket)
+        # Reset must restore quota; elapsed time cannot replenish it here.
         with pytest.raises(RateLimitExceeded):
-            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
+            await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=1)
 
         # Reset the bucket (specify algorithm for proper reset)
         await limiter.reset(key=key, algorithm="token_bucket")
@@ -470,9 +465,9 @@ class TestTokenBucket:
             result = await limiter.check(key=key, rate=rate, algorithm="token_bucket")
             assert result is True
 
-    async def test_token_bucket_usage_stats(self, clean_limiter):
+    async def test_token_bucket_usage_stats(self, frozen_limiter):
         """Test getting token bucket usage statistics."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "usage-test-tb"
         rate = "10/second"
 
@@ -487,8 +482,7 @@ class TestTokenBucket:
         assert "limit" in usage
         assert "remaining" in usage
         assert usage["limit"] == 10
-        # Should have ~8 tokens remaining (started with 10, used 2)
-        assert 7 <= usage["remaining"] <= 9
+        assert usage["remaining"] == 8
 
     async def test_no_window_boundary_burst(self, clean_limiter):
         """Test that token bucket doesn't have window boundary bursts."""
@@ -517,9 +511,9 @@ class TestTokenBucket:
         with pytest.raises(RateLimitExceeded):
             await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=10)
 
-    async def test_high_burst_rate(self, clean_limiter):
+    async def test_high_burst_rate(self, frozen_limiter):
         """Test token bucket with very high burst rate."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "high-burst-test"
         rate = "100/second"  # Use 100/s for more reasonable test
 
@@ -534,9 +528,7 @@ class TestTokenBucket:
         results = await asyncio.gather(*tasks)
 
         allowed = sum(1 for r in results if r is True)
-        # Should allow approximately 100 (bucket capacity, with possible refill)
-        # Allow some variance due to refill during test execution
-        assert 95 <= allowed <= 110, f"Expected ~100 allowed, got {allowed}"
+        assert allowed == 100, f"Expected 100 allowed, got {allowed}"
 
     async def test_slow_refill_rate(self, clean_limiter):
         """Test token bucket with slow refill rate."""
@@ -558,9 +550,9 @@ class TestTokenBucket:
         except RateLimitExceeded:
             pass  # Expected if not enough tokens yet
 
-    async def test_fractional_cost(self, clean_limiter):
+    async def test_fractional_cost(self, frozen_limiter):
         """Test token bucket with fractional cost values."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "fractional-cost-test"
         rate = "10/second"
 
@@ -572,6 +564,6 @@ class TestTokenBucket:
         for _ in range(5):
             await limiter.check(key=key, rate=rate, algorithm="token_bucket", cost=1)
 
-        # Should have ~5 tokens remaining (used 5 of 10)
+        # No refill can change the five tokens left by these admissions.
         usage = await limiter.get_usage(key=key, rate=rate, algorithm="token_bucket")
-        assert 3 <= usage["remaining"] <= 6, f"Expected ~5 remaining, got {usage['remaining']}"
+        assert usage["remaining"] == 5

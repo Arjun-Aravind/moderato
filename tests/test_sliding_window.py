@@ -33,9 +33,9 @@ class TestSlidingWindowBasic:
             key=f"lua-time-{uuid4().hex}", rate="1/minute", algorithm="sliding_window"
         )
 
-    async def test_basic_rate_limiting(self, clean_limiter):
+    async def test_basic_rate_limiting(self, frozen_limiter):
         """Test that basic rate limiting allows and denies correctly."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-basic-{uuid4().hex}"
         rate = "5/minute"
 
@@ -51,9 +51,9 @@ class TestSlidingWindowBasic:
         assert exc_info.value.retry_after > 0
         assert exc_info.value.remaining == 0
 
-    async def test_sliding_window_allows_burst(self, clean_limiter):
+    async def test_sliding_window_allows_burst(self, frozen_limiter):
         """Test that initial burst is allowed up to limit."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-burst-{uuid4().hex}"
         rate = "50/minute"
 
@@ -66,9 +66,9 @@ class TestSlidingWindowBasic:
         with pytest.raises(RateLimitExceeded):
             await limiter.check(key=key, rate=rate, algorithm="sliding_window")
 
-    async def test_sliding_window_with_cost(self, clean_limiter):
+    async def test_sliding_window_with_cost(self, frozen_limiter):
         """Test sliding window with cost parameter."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-cost-{uuid4().hex}"
         rate = "10/minute"
 
@@ -82,9 +82,9 @@ class TestSlidingWindowBasic:
         with pytest.raises(RateLimitExceeded):
             await limiter.check(key=key, rate=rate, algorithm="sliding_window", cost=1)
 
-    async def test_reset_clears_both_windows(self, clean_limiter):
+    async def test_reset_clears_both_windows(self, frozen_limiter):
         """Test that reset clears sliding window state."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-reset-{uuid4().hex}"
         rate = "5/minute"
 
@@ -130,13 +130,13 @@ class TestSlidingWindowWeighting:
         # not one whole request fits even when displayed usage rounds to zero.
         assert usage["remaining"] == 0
 
-    async def test_weight_calculation_mid_window(self, clean_limiter):
+    async def test_weight_calculation_mid_window(self, frozen_limiter):
         """
         Test weighted calculation at middle of window.
 
         At 30s into a 60s window, previous window should have 50% weight.
         """
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-weight-{uuid4().hex}"
         rate = "10/minute"  # 60 second window
 
@@ -183,9 +183,9 @@ class TestSlidingWindowWeighting:
         # Should allow some requests due to weight decay
         assert count >= 1, "Should allow at least 1 request after weight decay"
 
-    async def test_get_usage_shows_weight(self, clean_limiter):
+    async def test_get_usage_shows_weight(self, frozen_limiter):
         """Test that get_usage returns weight information for sliding window."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-usage-weight-{uuid4().hex}"
         rate = "100/minute"
 
@@ -252,14 +252,14 @@ class TestSlidingWindowRetryAfter:
         # precede that conservative delay from the sampled Redis time.
         assert result[3] == base + math.ceil(offset_ms / 1000) + math.ceil(result[2] / 1000)
 
-    async def test_retry_after_is_accurate(self, clean_limiter):
+    async def test_retry_after_is_accurate(self, frozen_limiter):
         """
         Test that retry_after is provided when rate limited.
 
         The sliding window retry_after should reflect when weight decay
         will free up enough capacity, not just end of current window.
         """
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-retry-{uuid4().hex}"
         rate = "10/second"
 
@@ -308,8 +308,8 @@ class TestSlidingWindowRetryAfter:
 class TestSlidingWindowVsFixedWindow:
     """Compare sliding window to fixed window behavior."""
 
-    async def test_same_limit_for_single_burst(self, clean_limiter):
-        limiter = clean_limiter
+    async def test_same_limit_for_single_burst(self, frozen_limiter):
+        limiter = frozen_limiter
         rate = "10/hour"
 
         # Test with fixed window
@@ -413,9 +413,9 @@ class TestSlidingWindowVsFixedWindow:
 class TestSlidingWindowTenantIsolation:
     """Test tenant isolation for sliding window."""
 
-    async def test_different_tenants_isolated(self, clean_limiter):
+    async def test_different_tenants_isolated(self, frozen_limiter):
         """Test that different tenants have isolated sliding windows."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "shared-user"
         rate = "5/minute"
 
@@ -438,9 +438,9 @@ class TestSlidingWindowTenantIsolation:
             )
             assert result is True
 
-    async def test_same_tenant_same_key_shared(self, clean_limiter):
+    async def test_same_tenant_same_key_shared(self, frozen_limiter):
         """Test that same tenant with same key shares limit."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = "shared-user"
         rate = "10/minute"
 
@@ -468,9 +468,9 @@ class TestSlidingWindowTenantIsolation:
 class TestSlidingWindowConcurrency:
     """Concurrency tests for sliding window algorithm."""
 
-    async def test_concurrent_requests_atomic(self, clean_limiter):
+    async def test_concurrent_requests_atomic(self, frozen_limiter):
         """Test that concurrent requests maintain atomicity."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-concurrent-{uuid4().hex}"
         rate = "20/second"
 
@@ -491,9 +491,9 @@ class TestSlidingWindowConcurrency:
         assert allowed == 20, f"Expected 20 allowed, got {allowed}"
         assert denied == 20, f"Expected 20 denied, got {denied}"
 
-    async def test_high_concurrency_accuracy(self, clean_limiter):
+    async def test_high_concurrency_accuracy(self, frozen_limiter):
         """Test sliding window accuracy under high concurrency."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-high-concurrent-{uuid4().hex}"
         rate = "50/second"
 
@@ -517,9 +517,9 @@ class TestSlidingWindowConcurrency:
 class TestSlidingWindowUsageStats:
     """Tests for get_usage() with sliding window algorithm."""
 
-    async def test_usage_returns_correct_fields(self, clean_limiter):
+    async def test_usage_returns_correct_fields(self, frozen_limiter):
         """Test that get_usage returns correct fields for sliding window."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         key = f"sliding-stats-{uuid4().hex}"
         rate = "100/minute"
 

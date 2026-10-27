@@ -4,16 +4,17 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.6.x   | Release preparation; not yet published |
-| 0.5.x   | ✅ Current published release |
+| 0.6.x   | ✅ Published releases |
+| 0.5.x   | ✅        |
 | 0.4.x   | ✅        |
 | < 0.4   | ❌        |
 
-Version 0.6.0 is an unpublished release candidate. A dated changelog and package
-version do not establish publication or security support for an unreleased build.
-Existing 0.4.x support is retained; this preparation does not withdraw it.
+This policy applies to published releases. Check
+[PyPI](https://pypi.org/project/moderato/) for available distributions; a dated
+changelog and package version do not establish publication or security support
+for an unreleased build. Existing 0.5.x and 0.4.x support is retained.
 
-Version 0.6.0 targets CPython 3.10–3.14 and removes Python 3.9;
+Version 0.6.x targets CPython 3.10–3.14 and removes Python 3.9;
 published older releases retain their original Python metadata.
 See the [Python support/deprecation policy](README.md#python-support-policy).
 Library compatibility does not extend CPython's security lifecycle: Python 3.10

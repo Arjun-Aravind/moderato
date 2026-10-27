@@ -186,7 +186,7 @@ async def test_asgi_backend_failure_after_response_start_is_not_replaced(frozen_
 
 
 @pytest.fixture
-def app_with_middleware(redis_url):
+def app_with_middleware(redis_url, freeze_limiter_time):
     """Create FastAPI app with rate limit middleware."""
     # Flush Redis so each test starts with clean rate limit state.
     # Without this, the fixed key_prefix + shared IP key means tests
@@ -200,6 +200,7 @@ def app_with_middleware(redis_url):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await limiter.connect()
+        await freeze_limiter_time(limiter)
         yield
         await limiter.close()
 
@@ -286,11 +287,7 @@ class TestRateLimitHeadersMiddleware:
         with TestClient(app_with_middleware) as client:
             for _ in range(5):
                 assert client.get("/limited").status_code == 200
-            for _ in range(15):
-                if client.get("/limited").status_code == 429:
-                    break
-            else:
-                pytest.fail("/limited did not reach its rate limit")
+            assert client.get("/limited").status_code == 429
             assert client.get("/limited-two").status_code == 200
 
     def test_endpoint_without_rate_limit(self, app_with_middleware):
@@ -304,14 +301,14 @@ class TestRateLimitHeadersMiddleware:
 
     def test_reset_timestamp_in_future(self, app_with_middleware):
         """Test that reset timestamp is in the future."""
-        import time
-
         with TestClient(app_with_middleware) as client:
             response = client.get("/limited")
             assert response.status_code == 200
 
             reset_timestamp = int(response.headers["X-RateLimit-Reset"])
-            current_time = int(time.time())
+            current_time, _ = client.portal.call(
+                app_with_middleware.state.limiter.backend.get_redis_time
+            )
 
             # Reset should be in the future (within 60 seconds for minute limit)
             assert reset_timestamp > current_time
@@ -459,13 +456,13 @@ class TestMiddlewareIntegration:
         assert response.headers["X-RateLimit-Remaining"] == "2"
         assert response.headers["Retry-After"] == "7"
 
-    async def test_middleware_with_limiter_check(self, clean_limiter):
+    async def test_middleware_with_limiter_check(self, frozen_limiter):
         """Test middleware integration with actual limiter."""
         import httpx
         from fastapi import FastAPI, Request
 
         app = FastAPI()
-        limiter = clean_limiter
+        limiter = frozen_limiter
 
         app.add_middleware(RateLimitHeadersMiddleware)
 
@@ -540,7 +537,7 @@ class TestRateLimitMiddleware:
     """Tests for the lower-level ASGI RateLimitMiddleware."""
 
     @pytest.fixture
-    def app_with_rate_limit_middleware(self, redis_url):
+    def app_with_rate_limit_middleware(self, redis_url, freeze_limiter_time):
         import uuid
 
         from moderato.decorators import RateLimitMiddleware
@@ -552,6 +549,7 @@ class TestRateLimitMiddleware:
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             await limiter.connect()
+            await freeze_limiter_time(limiter)
             yield
             await limiter.close()
 
@@ -572,14 +570,7 @@ class TestRateLimitMiddleware:
                 assert client.get("/anything").status_code == 200
 
             before = int(time.time())
-            # If the 5-request fill straddled a minute boundary, the bucket
-            # reset and the probe succeeds; keep probing so a boundary straddle
-            # cannot flake this.
-            response = None
-            for _ in range(15):
-                response = client.get("/anything")
-                if response.status_code == 429:
-                    break
+            response = client.get("/anything")
 
         assert response.status_code == 429
         assert response.headers["X-RateLimit-Limit"] == "5"

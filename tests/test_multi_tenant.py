@@ -14,9 +14,9 @@ class TestMultiTenant:
     """Test suite for multi-tenant rate limiting."""
 
     @pytest.mark.asyncio
-    async def test_tenant_isolation(self, clean_limiter):
+    async def test_tenant_isolation(self, frozen_limiter):
         """Test that tenants are properly isolated."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
 
         tenants = [
             ("tenant-1", "free"),
@@ -39,9 +39,9 @@ class TestMultiTenant:
             assert exc_info.value.remaining == 0
 
     @pytest.mark.asyncio
-    async def test_different_tier_limits(self, clean_limiter):
+    async def test_different_tier_limits(self, frozen_limiter):
         """Test different rate limits for different tenant tiers."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
 
         # Define tier-specific limits
         tier_limits = {
@@ -69,9 +69,9 @@ class TestMultiTenant:
                 assert result is True
 
     @pytest.mark.asyncio
-    async def test_tenant_upgrade_scenario(self, clean_limiter):
+    async def test_tenant_upgrade_scenario(self, frozen_limiter):
         """Test tenant upgrading from free to premium tier."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         tenant_id = "upgrade-test"
 
         # Start as free tier
@@ -94,9 +94,9 @@ class TestMultiTenant:
             await limiter.check(key=tenant_id, rate=free_limit, tenant_type="free")
 
     @pytest.mark.asyncio
-    async def test_api_key_based_tenant(self, clean_limiter, make_request):
+    async def test_api_key_based_tenant(self, frozen_limiter, make_request):
         """Test rate limiting based on API keys."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
 
         # Simulate API key to tenant mapping
         api_key_tiers = {
@@ -128,17 +128,9 @@ class TestMultiTenant:
                 await api_endpoint(request)
 
     @pytest.mark.asyncio
-    async def test_concurrent_multi_tenant(self, clean_limiter):
+    async def test_concurrent_multi_tenant(self, frozen_limiter):
         """Test concurrent requests from multiple tenants."""
-        limiter = clean_limiter
-
-        # A fixed-window boundary mid-test resets every counter and admits
-        # extra requests. Use an hour window and, near its end, wait on the
-        # Redis clock for the next one so the run never straddles a boundary.
-        now, _ = await limiter.backend.get_redis_time()
-        runway = 3600 - now % 3600
-        if runway < 30:
-            await asyncio.sleep(runway + 0.05)
+        limiter = frozen_limiter
 
         async def make_tenant_requests(tenant_id: str, tenant_type: str, count: int):
             """Helper to make requests for a tenant."""
@@ -196,9 +188,9 @@ class TestMultiTenant:
             assert result is True
 
     @pytest.mark.asyncio
-    async def test_tenant_rate_limit_headers(self, clean_limiter, make_request):
+    async def test_tenant_rate_limit_headers(self, frozen_limiter, make_request):
         """Test that rate limit headers are tenant-aware."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
 
         @limiter.limit(
             "5/minute",
@@ -226,17 +218,9 @@ class TestMultiTenant:
         assert headers["X-RateLimit-Remaining"] == "0"
 
     @pytest.mark.asyncio
-    async def test_tenant_usage_tracking(self, clean_limiter):
+    async def test_tenant_usage_tracking(self, frozen_limiter):
         """Test tracking usage per tenant."""
-        limiter = clean_limiter
-
-        # Usage totals must all land in one fixed window; a minute boundary
-        # mid-loop would reset the counters and undercount. Use an hour
-        # window and, near its end, wait on the Redis clock for the next one.
-        now, _ = await limiter.backend.get_redis_time()
-        runway = 3600 - now % 3600
-        if runway < 30:
-            await asyncio.sleep(runway + 0.05)
+        limiter = frozen_limiter
 
         tenants = [
             ("tenant-alpha", "free", "1200/hour", 15),
@@ -258,9 +242,9 @@ class TestMultiTenant:
             assert usage["remaining"] == expected_limit - request_count
 
     @pytest.mark.asyncio
-    async def test_tenant_reset(self, clean_limiter):
+    async def test_tenant_reset(self, frozen_limiter):
         """Test resetting limits for specific tenants."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         tenant_id = "reset-tenant"
 
         # Use up limits for different tenant types
@@ -284,9 +268,9 @@ class TestMultiTenant:
             await limiter.check(key=tenant_id, rate="5/minute", tenant_type="premium")
 
     @pytest.mark.asyncio
-    async def test_wildcard_tenant_operations(self, clean_limiter):
+    async def test_wildcard_tenant_operations(self, frozen_limiter):
         """Test operations across all tenant types."""
-        limiter = clean_limiter
+        limiter = frozen_limiter
         tenant_id = "wildcard-test"
 
         # Create limits for multiple tenant types
